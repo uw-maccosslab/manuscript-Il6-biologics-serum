@@ -1,0 +1,538 @@
+---
+title: "IL6 Serum Biologics"
+output: html_notebook
+---
+
+## Libraries
+
+```{r}
+library(cowplot)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(plotly)
+library(ggrepel)
+library(svglite)
+library(ComplexHeatmap)
+library(tidyverse)
+```
+
+
+## Import dataframes
+
+```{r}
+all_peptides <- read.csv("Input/250121_T1D_Serum_EV_Treatment.csv",
+                         header=TRUE, 
+                         na = "#N/A") %>%
+  # This protein has significant peptide overlap with Siltuximab
+  # It is removed here to avoid spurious results/incorrect quantitation
+  # Open to other ideas
+  filter(!grepl("HV145",Protein)) 
+
+
+
+meta <- read.csv("Input/250125_meta.csv",
+                 stringsAsFactors = FALSE)
+```
+
+### Roll up into proteins
+
+```{r}
+protein_data <- all_peptides %>%
+  group_by(Protein) %>%
+  summarise(across(7:ncol(all_peptides)-1, sum, na.rm = TRUE))
+protein_data <- protein_data %>%
+  mutate(across(-Protein, ~ replace(., . == 0, NA)))
+```
+
+
+
+
+### Data manipulation, mAb peptide-level
+
+#### Siltuximab
+
+- Results in "s.peptide_data", a dataframe with only siltuximab peptides in siltuximab treatment
+- Writes siltux_peptides.csv for plotting
+
+```{r}
+df <- all_peptides %>%
+  filter(grepl("siltux", Protein, ignore.case=TRUE))
+
+df$Protein_peptide <- paste0(df$Protein,"_",df$Peptide.Modified.Sequence)
+
+row.names(df) <- df$Protein_peptide
+
+Siltux_baseline_sequence <- sprintf("S%02d",seq(1,19,by=2))
+Siltux_treat_sequence <- sprintf("S%02d",seq(2,20,by=2))
+
+Tocil_baseline_sequence <- sprintf("T%02d",seq(1,19,by=2))
+Tocil_treat_sequence <- sprintf("T%02d",seq(2,20,by=2))
+
+Siltux_baseline_peptides <- select(df, starts_with(Siltux_baseline_sequence))
+Siltux_treat_peptides <- select(df, starts_with(Siltux_treat_sequence))
+
+s.peptide_data <- cbind(Siltux_baseline_peptides, Siltux_treat_peptides)
+
+row.names(s.peptide_data) <- row.names(df)
+
+write.csv(s.peptide_data, "Output/siltux_peptides.csv")
+```
+
+#### Tocilizumab
+
+- Results in "t.peptide_data", a dataframe with only siltuximab peptides in siltuximab treatment
+- Writes tocilizumab_peptides.csv for plotting
+
+```{r}
+df <- all_peptides %>%
+  filter(grepl("tocil", Protein, ignore.case=TRUE))
+
+df$Protein_peptide <- paste0(df$Protein,"_",df$Peptide.Modified.Sequence)
+
+row.names(df) <- df$Protein_peptide
+
+#Siltux_baseline_sequence <- sprintf("S%02d",seq(1,19,by=2))
+#Siltux_treat_sequence <- sprintf("S%02d",seq(2,20,by=2))
+
+#Tocil_baseline_sequence <- sprintf("T%02d",seq(1,19,by=2))
+#Tocil_treat_sequence <- sprintf("T%02d",seq(2,20,by=2))
+
+Tocil_baseline_peptides <- select(df, starts_with(Tocil_baseline_sequence))
+Tocil_treat_peptides <- select(df, starts_with(Tocil_treat_sequence))
+
+t.peptide_data <- cbind(Tocil_baseline_peptides, Tocil_treat_peptides)
+
+row.names(t.peptide_data) <- row.names(df)
+
+write.csv(t.peptide_data,"Output/tocilizumab_peptides.csv")
+```
+
+### Rolling up mAbs into protein-level from a select few peptides
+
+- Requires an input, manually-filtered set of mAb peptides
+  - These were peptides belonging to the mAbs which satisfied the two following conditions:
+    - Were unique to the mAb (not found in other, endogenous Igs)
+      - NOTE: one peptide quantifying siltuximab (SEDTA...) overlaps with HV145 but is seemingly mostly coming from siltuximab given that it correlates with other siltuximab peptides. Consider removing this peptide from Ab quantitation
+    - Significantly increased in treatment (t-tests performed in Prism)
+  - Does not require running the above two sections
+
+```{r}
+quant_peptides <- read.csv("Input/250124_treatment_peptides.csv", header = FALSE)
+
+all_peptides_siltux <- all_peptides %>%
+  filter(grepl("siltux", Protein, ignore.case=TRUE))
+
+all_peptides_siltux$Protein_peptide <- 
+  paste0(all_peptides_siltux$Protein,"_", 
+  all_peptides_siltux$Peptide.Modified.Sequence)
+
+query <- quant_peptides
+rownames(all_peptides_siltux) <- all_peptides_siltux$Protein_peptide
+
+all_rownames <- rownames(all_peptides_siltux)
+
+query <- query[[1]]
+matches <- sapply(all_rownames, function(protein) {
+any(sapply(query, function(name) grepl(name, protein)))
+})
+filtered_query <- all_peptides_siltux[matches, ]
+
+siltux_good_peptides <- filtered_query
+
+siltux_quant <- siltux_good_peptides %>%
+  summarise(across(where(is.numeric), sum, na.rm=TRUE))
+
+siltux_quant$Protein = "Siltux_filtered"
+
+all_peptides_tocil <- all_peptides %>%
+  filter(grepl("tocil", Protein, ignore.case=TRUE))
+
+all_peptides_tocil$Protein_peptide <- paste0(all_peptides_tocil$Protein,"_", all_peptides_tocil$Peptide.Modified.Sequence)
+
+
+
+query <- quant_peptides
+rownames(all_peptides_tocil) <- all_peptides_tocil$Protein_peptide
+
+all_rownames <- rownames(all_peptides_tocil)
+
+query <- query[[1]]
+matches <- sapply(all_rownames, function(protein) {
+any(sapply(query, function(name) grepl(name, protein)))
+})
+filtered_query <- all_peptides_tocil[matches, ]
+
+tocil_good_peptides <- filtered_query
+
+tocil_quant <- tocil_good_peptides %>%
+  summarise(across(where(is.numeric), sum, na.rm=TRUE))
+
+tocil_quant$Protein = "Tocil_filtered"
+
+protein_data <- rbind(protein_data, tocil_quant) %>%
+  rbind(., siltux_quant)
+```
+
+### Data manipulation, protein-level, with quantitation of tocilizumab and situximab included
+
+
+```{r}
+all_proteins <- protein_data
+
+row.names(all_proteins) <- all_proteins$Protein
+
+Siltux_baseline_sequence <- sprintf("S%02d",seq(1,19,by=2))
+Siltux_treat_sequence <- sprintf("S%02d",seq(2,20,by=2))
+
+Tocil_baseline_sequence <- sprintf("T%02d",seq(1,19,by=2))
+Tocil_treat_sequence <- sprintf("T%02d",seq(2,20,by=2))
+
+Siltux_baseline <- select(all_proteins, starts_with(Siltux_baseline_sequence))
+Siltux_treat <- select(all_proteins, starts_with(Siltux_treat_sequence))
+
+s.protein_data <- cbind(Siltux_baseline, Siltux_treat)
+
+row.names(s.protein_data) <- row.names(all_proteins)
+
+#write.csv(s.protein_data, "250125_siltux.csv")
+
+Tocil_baseline <- select(all_proteins, starts_with(Tocil_baseline_sequence))
+Tocil_treat <- select(all_proteins, starts_with(Tocil_treat_sequence))
+
+t.protein_data <- cbind(Tocil_baseline, Tocil_treat)
+
+row.names(t.protein_data) <- row.names(all_proteins)
+
+#write.csv(t.protein_data,"250121_tocil.csv")
+
+all_samples <- cbind(s.protein_data, t.protein_data)
+```
+
+
+## Protein-level equalize medians
+
+```{r}
+df <- all_samples
+
+i=1
+
+
+info <- data.frame()
+for(i in 1:ncol(df)){
+  name <- colnames(df)[i]
+  intensities <- df[,i]
+  median <- median(intensities, na.rm=TRUE)
+  var <- var(intensities, na.rm=TRUE)
+  df_add <- data.frame(name, median, var)
+  info <- rbind(info, df_add)
+}
+
+ggplot(info, aes(x = name, y = median)) +
+  geom_col(fill = "steelblue") +
+  theme_cowplot() +
+  labs(x = "Name", y = "Median") +
+  theme(axis.text.x = element_text(angle=90, hjust=0.5, vjust=0.5, size=10))
+
+normed <- data.frame(row.names = row.names(df))
+i=1
+
+for(i in 1:ncol(df)){
+  normed[,i]=df[,i]/info$median[i]
+}
+colnames(normed) <- colnames(df)
+
+normed_info <- data.frame()
+for(i in 1:ncol(normed)){
+  name <- colnames(normed)[i]
+  intensities <- normed[,i]
+  median <- median(intensities, na.rm=TRUE)
+  var <- var(intensities, na.rm=TRUE)
+  df_add <- data.frame(name, median, var)
+  normed_info <- rbind(normed_info, df_add)
+}
+
+ggplot(normed_info, aes(x = name, y = median)) +
+  geom_col(fill = "steelblue") +
+  theme_cowplot() +
+  labs(x = "Name", y = "Median") +
+  theme(axis.text.x = element_text(angle=90, hjust=0.5, vjust=0.5, size=10))
+```
+
+## Limma, volcano plots
+
+### Siltuximab Limma
+```{r}
+
+#Select only siltuximab treatment samples
+num.df <- normed[1:20]
+#rownames(num.df) <-s.protein_data[,1]
+
+#Removing 0's because they don't log2
+num.df[num.df==0] <- NA
+
+#make the data a matrix of values
+mat <- data.matrix(num.df)
+#Limma expects a log2 transform
+l2m <- log2(mat)
+
+#Extracting conditions from metadata file
+patient <- factor(meta$Patient)
+treat <- factor(meta$Condition, level=c('SB','ST'))
+
+design <- model.matrix(~patient+treat)
+
+fit <- lmFit(l2m, design)
+fits <- eBayes(fit)
+
+#contrast.matrix <- makeContrasts(
+  #Siltux_Treatment_vs_Baseline = ST - SB,
+ # levels = design
+#)
+
+s.results <- topTable(fits, coef = "treatST", adjust="BH", n=Inf)
+c.s.results <- s.results
+c.s.results["-log10_adj_p-val"] <- -log10(c.s.results[5])
+
+c.s.results <- c.s.results %>% mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.names(c.s.results)))
+sig_s_results <- c.s.results[which(c.s.results$adj.P.Val<0.05),]
+
+#write.csv(c.s.results, "250219 Siltux treatment vs baseline PAIRED extra_median normalized imputed.csv", row.names = TRUE)
+
+
+ggplot(c.s.results, aes(x = logFC, y = `-log10_adj_p-val`)) + 
+  geom_point(color = "grey80") + 
+  theme_cowplot() + 
+  geom_point(data = sig_s_results, aes(x = logFC, y = `-log10_adj_p-val`), color = "black") +
+  geom_text_repel(data = sig_s_results, aes(x = logFC, y = `-log10_adj_p-val`, label = gene), 
+                  color = "black", size = 3, box.padding = 0.3) +
+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+   
+  scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1.5,-1, -0.5, 0, 0.5, 1, 1.5, 2)) + 
+  scale_y_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2, 2.5)) + 
+  theme(axis.title = element_blank())
+ggsave("Output/250227_siltux_volcano.svg", width=6, height = 8)
+write.csv(c.s.results,"Output/siltux_limma.csv")
+```
+
+### Tocilizumab Limma
+```{r}
+num.df <- normed[21:40]
+#rownames(num.df) <-t.protein_data[,1]
+#select numeric
+#num.df <- as.data.frame(num.df[,2:ncol(num.df)])
+#head(num.df)
+
+
+#Removing 0's because they don't log2
+num.df[num.df==0] <- NA
+
+#make the data a matrix of values
+mat <- data.matrix(num.df)
+#Limma expects a log2 value, so converting that if it is not already
+l2m <- log2(mat)
+
+#Extracting conditions
+patient <- factor(meta$Patient)
+treat <- factor(meta$Condition, level=c('TB','TT'))
+
+design <- model.matrix(~patient+treat)
+
+fit <- lmFit(l2m, design)
+fits <- eBayes(fit)
+
+#contrast.matrix <- makeContrasts(
+  #Siltux_Treatment_vs_Baseline = ST - SB,
+  #levels = design
+#)
+
+t.results <- topTable(fits, coef = "treatTT", adjust="BH", n=Inf)
+
+#t.results <- topTable(fits, coef = "Tocil_Treatment_vs_Baselin")
+
+c.t.results <- t.results
+c.t.results["-log10_adj_p-val"] <- -log10(c.t.results[5])
+
+#write.csv(c.t.results, "250226 Tocil treatment vs baseline PAIRED TIC normalized imputed.csv", row.names = TRUE)
+
+ggplot(c.t.results, aes(x=logFC, y=`-log10_adj_p-val`))+
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(x="Log2(Fold Change)", y="-Log10(p-value)", title = "Tocil treatment vs baseline PAIRED, TIC normalized, imputed boundaries")
+
+c.t.results <- c.t.results %>% mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.names(c.t.results)))
+
+sig_t_results <- c.t.results[which(c.t.results$adj.P.Val<0.05),]
+
+ggplot(c.t.results, aes(x = logFC, y = `-log10_adj_p-val`)) + 
+  geom_point(color = "grey80") + 
+  theme_cowplot() + 
+  geom_point(data = sig_t_results, aes(x = logFC, y = `-log10_adj_p-val`), color = "black") +
+  geom_text_repel(data = sig_t_results, aes(x = logFC, y = `-log10_adj_p-val`, label = gene), 
+                  color = "black", size = 3, box.padding = 0.3, max.overlaps = 15) +
+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  
+  scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1.5,-1, -0.5, 0, 0.5, 1, 1.5, 2)) + 
+  scale_y_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2, 2.5)) + 
+  theme(axis.title = element_blank())
+ggsave("Output/250227_tocil_volcano.svg", width=6, height = 8)
+
+write.csv(c.t.results,"Output/tocil_limma.csv")
+
+```
+
+
+## Statistical propogation for bar plots
+
+From Wu, et al. 2024 (2023?)
+
+Converting 95% CI to standard error:
+
+  $$SE_{FC} = \frac{FC_{max} - FC_{min}}{\ 3.92}$$
+
+Converting standard error to standard deviation:
+
+  $$SD_{FC} = \frac{SE_{FC}}{\sqrt{\frac{1}{n_{EV}}+\frac{1}{n_{Plasma}}}}$$
+  
+  
+Taking into account Log2 transformation on standard deviation:
+
+  $$SD_{Log_{2}FC} = \frac{1}{ln(2)}*\frac{SD_{FC}}{FC}$$
+
+- Requires identified significant proteins from Limma
+- Requires all_proteins_ratios
+
+### Preparing ratios from normalized data
+```{r}
+df <- normed
+
+Siltux_baseline <- select(df, starts_with(Siltux_baseline_sequence))
+Siltux_treat <- select(df, starts_with(Siltux_treat_sequence))
+Tocil_baseline <- select(df, starts_with(Tocil_baseline_sequence))
+Tocil_treat <- select(df, starts_with(Tocil_treat_sequence))
+Siltux_ratio <- Siltux_treat/Siltux_baseline
+Tocil_ratio <- Tocil_treat/Tocil_baseline
+
+all_proteins_ratios <- cbind(Siltux_ratio, Tocil_ratio)
+```
+
+#### Sorting out what's significant
+```{r}
+sig_s_list <- sig_s_results$gene
+sig_t_list <- sig_t_results$gene
+sig_s_only <- setdiff(sig_s_list, sig_t_list)
+sig_t_only <- setdiff(sig_t_list, sig_s_list)
+sig_both <- intersect(sig_s_list, sig_t_list)
+sig_all <- union(sig_s_list, sig_t_list)
+
+
+```
+
+
+```{r}
+CI_SEwidth <- (2*1.96)
+n_treat = 10
+n_control = 10
+denom <- 1/(sqrt((1/n_treat)+(1/n_control)))
+
+df <- all_proteins_ratios %>%
+  mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.names(df)))%>%
+  mutate("siltux_minFC" = apply(select(.,1:10),1, min, na.rm=TRUE),
+         "siltux_maxFC" = apply(select(.,1:10),1, max, na.rm=TRUE),
+         "siltux_mean" = rowMeans(select(.,1:10), na.rm=TRUE),
+         "siltux_SE" = ((siltux_maxFC-siltux_minFC)/CI_SEwidth),
+         "siltux_SD" = siltux_SE/denom,
+         "siltux_mean_log2" = log2(siltux_mean),
+         "siltux_SD_log2" = 1/log(2)*siltux_SD/siltux_mean) %>%
+  mutate("tocil_minFC" = apply(select(.,11:20),1, min, na.rm=TRUE),
+         "tocil_maxFC" = apply(select(.,11:20),1, max, na.rm=TRUE),
+         "tocil_mean" = rowMeans(select(.,11:20), na.rm=TRUE),
+         "tocil_SE" = ((tocil_maxFC-tocil_minFC)/CI_SEwidth),
+         "tocil_SD" = tocil_SE/denom,
+         "tocil_mean_log2" = log2(tocil_mean),
+         "tocil_SD_log2" = 1/log(2)*tocil_SD/tocil_mean)
+
+# Tocil only 
+df_tocil_only <- df %>% filter(gene %in% sig_t_only)
+df_siltux_only <- df %>% filter(gene %in% sig_s_only)
+df_both <- df %>% filter(gene %in% sig_both)
+df_sig_all <- df %>% filter(gene %in% sig_all)
+
+write.csv(df_tocil_only, "Output/250416_tocil_only.csv")
+write.csv(df_siltux_only, "Output/250416_siltux_only.csv")
+write.csv(df_both, "Output/250416_both.csv")
+write.csv(df_sig_all, "Output/sig_all.csv")
+```
+
+####Put some nice ggbar plots here
+```{r}
+
+
+```
+
+
+## Heatmaps
+
+```{r}
+df <- normed 
+df <- df %>%
+  mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.names(df))) %>%
+  filter(gene %in% sig_all)
+
+row.names(df) <- df$gene
+colnames(df) <- substr(colnames(df), 1, 3)
+
+df_siltux <- df[1:20]
+df_tocil <- df[21:40]
+df_siltux_scale <- t(scale(t(df_siltux)))
+df_tocil_scale <- t(scale(t(df_tocil)))
+
+pre_treatment <- c(Siltux_baseline_sequence, Tocil_baseline_sequence)
+treatment_status_siltux <- ifelse(colnames(df_siltux) %in% pre_treatment, "Pre", "Post") %>%
+  factor(., levels=c("Pre", "Post"))
+treatment_status_tocil <- ifelse(colnames(df_tocil) %in% pre_treatment, "Pre", "Post")%>%
+  factor(., levels=c("Pre", "Post"))
+
+treatment_annot_siltux <- HeatmapAnnotation(
+  Treatment = treatment_status_siltux,
+  col = list(Treatment = c("Pre" = "#FFBE45", "Post" = "#DD4AC0"))
+)
+
+treatment_annot_tocil <-HeatmapAnnotation(
+  Treatment = treatment_status_tocil,
+  col = list(Treatment = c("Pre" = "#FFBE45", "Post" = "#DD4AC0"))
+)
+```
+
+
+```{r}
+pdf("Output/250416_heatmap_siltux.pdf", width=10, height=15)
+
+
+Heatmap(df_siltux_scale,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        column_names_side = "top",
+        color = colorRampPalette(c("blue", "white", "red"))(100),
+        top_annotation = treatment_annot_siltux)
+dev.off()
+
+pdf("Output/250416_heatmap_tocil.pdf", width=10, height=15)
+
+Heatmap(df_tocil_scale,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        column_names_side = "top",
+        color = colorRampPalette(c("blue", "white", "red"))(100),
+        top_annotation = treatment_annot_tocil)
+dev.off()
+
+```
+
