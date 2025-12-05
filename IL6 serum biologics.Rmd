@@ -17,7 +17,6 @@ library(ComplexHeatmap)
 library(tidyverse)
 ```
 
-
 ## Import dataframes
 
 ```{r}
@@ -45,15 +44,12 @@ protein_data <- protein_data %>%
   mutate(across(-Protein, ~ replace(., . == 0, NA)))
 ```
 
-
-
-
 ### Data manipulation, mAb peptide-level
 
 #### Siltuximab
 
-- Results in "s.peptide_data", a dataframe with only siltuximab peptides in siltuximab treatment
-- Writes siltux_peptides.csv for plotting
+-   Results in "s.peptide_data", a dataframe with only siltuximab peptides in siltuximab treatment
+-   Writes siltux_peptides.csv for plotting
 
 ```{r}
 df <- all_peptides %>%
@@ -81,8 +77,8 @@ write.csv(s.peptide_data, "Output/siltux_peptides.csv")
 
 #### Tocilizumab
 
-- Results in "t.peptide_data", a dataframe with only siltuximab peptides in siltuximab treatment
-- Writes tocilizumab_peptides.csv for plotting
+-   Results in "t.peptide_data", a dataframe with only siltuximab peptides in siltuximab treatment
+-   Writes tocilizumab_peptides.csv for plotting
 
 ```{r}
 df <- all_peptides %>%
@@ -110,12 +106,12 @@ write.csv(t.peptide_data,"Output/tocilizumab_peptides.csv")
 
 ### Rolling up mAbs into protein-level from a select few peptides
 
-- Requires an input, manually-filtered set of mAb peptides
-  - These were peptides belonging to the mAbs which satisfied the two following conditions:
-    - Were unique to the mAb (not found in other, endogenous Igs)
-      - NOTE: one peptide quantifying siltuximab (SEDTA...) overlaps with HV145 but is seemingly mostly coming from siltuximab given that it correlates with other siltuximab peptides. Consider removing this peptide from Ab quantitation
-    - Significantly increased in treatment (t-tests performed in Prism)
-  - Does not require running the above two sections
+-   Requires an input, manually-filtered set of mAb peptides
+    -   These were peptides belonging to the mAbs which satisfied the two following conditions:
+        -   Were unique to the mAb (not found in other, endogenous Igs)
+            -   NOTE: one peptide quantifying siltuximab (SEDTA...) overlaps with HV145 but is seemingly mostly coming from siltuximab given that it correlates with other siltuximab peptides. Consider removing this peptide from Ab quantitation
+        -   Significantly increased in treatment (t-tests performed in Prism)
+    -   Does not require running the above two sections
 
 ```{r}
 quant_peptides <- read.csv("Input/250124_treatment_peptides.csv", header = FALSE)
@@ -176,7 +172,6 @@ protein_data <- rbind(protein_data, tocil_quant) %>%
 
 ### Data manipulation, protein-level, with quantitation of tocilizumab and situximab included
 
-
 ```{r}
 all_proteins <- protein_data
 
@@ -207,8 +202,45 @@ row.names(t.protein_data) <- row.names(all_proteins)
 #write.csv(t.protein_data,"250121_tocil.csv")
 
 all_samples <- cbind(s.protein_data, t.protein_data)
+
 ```
 
+### Data manipulation, peptide-level
+
+```{r}
+all_peptides_unique <- all_peptides %>%
+  distinct(Peptide, .keep_all = TRUE)
+  
+
+row.names(all_peptides_unique) <- all_peptides_unique$Peptide
+
+Siltux_baseline_sequence <- sprintf("S%02d",seq(1,19,by=2))
+Siltux_treat_sequence <- sprintf("S%02d",seq(2,20,by=2))
+
+Tocil_baseline_sequence <- sprintf("T%02d",seq(1,19,by=2))
+Tocil_treat_sequence <- sprintf("T%02d",seq(2,20,by=2))
+
+Siltux_baseline <- select(all_peptides_unique, starts_with(Siltux_baseline_sequence))
+Siltux_treat <- select(all_peptides_unique, starts_with(Siltux_treat_sequence))
+
+s.peptide_data <- cbind(Siltux_baseline, Siltux_treat)
+
+row.names(s.peptide_data) <- row.names(all_peptides_unique)
+
+#write.csv(s.protein_data, "250125_siltux.csv")
+
+Tocil_baseline <- select(all_peptides_unique, starts_with(Tocil_baseline_sequence))
+Tocil_treat <- select(all_peptides_unique, starts_with(Tocil_treat_sequence))
+
+t.peptide_data <- cbind(Tocil_baseline, Tocil_treat)
+
+row.names(t.peptide_data) <- row.names(all_peptides_unique)
+
+#write.csv(t.protein_data,"250121_tocil.csv")
+
+all_samples_peptides<- cbind(s.peptide_data, t.peptide_data)
+#write.csv(all_samples_peptides, "Output/2511.csv")
+```
 
 ## Protein-level equalize medians
 
@@ -228,6 +260,8 @@ for(i in 1:ncol(df)){
   info <- rbind(info, df_add)
 }
 
+med_med <- median(info$median)
+
 ggplot(info, aes(x = name, y = median)) +
   geom_col(fill = "steelblue") +
   theme_cowplot() +
@@ -238,8 +272,11 @@ normed <- data.frame(row.names = row.names(df))
 i=1
 
 for(i in 1:ncol(df)){
-  normed[,i]=df[,i]/info$median[i]
+  normed[,i]=df[,i]/info$median[i]*med_med
 }
+
+# MM feedback - multiply by a median of medians to get magnitude of signal back to where it was -- current problem is some signals look artifically tiny if they are 0.00001 of the median
+
 colnames(normed) <- colnames(df)
 
 normed_info <- data.frame()
@@ -252,6 +289,8 @@ for(i in 1:ncol(normed)){
   normed_info <- rbind(normed_info, df_add)
 }
 
+
+
 ggplot(normed_info, aes(x = name, y = median)) +
   geom_col(fill = "steelblue") +
   theme_cowplot() +
@@ -259,13 +298,125 @@ ggplot(normed_info, aes(x = name, y = median)) +
   theme(axis.text.x = element_text(angle=90, hjust=0.5, vjust=0.5, size=10))
 ```
 
+#### Export protein-level equalize median normalized dataframe
+
+```{r}
+normed_gn <- normed %>%
+  mutate(Reference = row.names(.)) %>%
+  left_join(
+    all_peptides %>% 
+      select(Protein, Protein.Accession) %>% 
+      distinct(Protein, .keep_all = TRUE),
+    by = c("Reference" = "Protein")
+  )%>%
+  mutate(
+    Protein.Accession = if_else(is.na(Protein.Accession) | Protein.Accession == "", Reference, Protein.Accession
+  ))
+
+#From uniprot website, convert accession number to proper gene name
+uniprot_gene_name <- read.csv("Input/Uniprot_to_gene_name.csv")
+
+normed_gn <- normed_gn %>%
+  mutate(
+    Accession_primary = trimws(sub("/.*$", "", Protein.Accession))
+  ) %>%
+  left_join(
+    uniprot_gene_name %>% select(Entry, GeneName),
+    by = c("Accession_primary" = "Entry")
+  ) %>%
+  mutate(
+    GeneName = if_else(is.na(GeneName) | GeneName == "", Protein.Accession, GeneName)
+  ) %>%
+  select(Reference, Protein.Accession, GeneName, everything())
+
+row.names(normed_gn) <- normed_gn$GeneName
+
+write.csv(normed_gn,"Output/251125_normed_proteins.csv")
+```
+
+### Barplots of interest
+
+```{r}
+
+library(ggtext)
+library(ggbeeswarm)
+library(ggsci)
+library(cowplot)
+
+var <- c(rep(c("siltuximab baseline", "siltuximab treatment", "tocilizumab baseline","tocilizumab treatment"), each=10))
+
+txt <- "PSMD6,PSMD13,PSMC1,PSMD2,PSMD8,IKBKB,PSMC5,PSMD12,PSMC2,PSMD14,PSMC3,PSMB5,PSMC4,UBB,NFKB1,PSMD1,PSMC6,PSMB6,MAP3K7,PSMA5,PSMD11,PSMB4,PSMB3,PSMA4,PSMB7,PSMA7,PSMA2,PSMB2,PSMA1,PSMA3,PSMA6"
+
+selected <- strsplit(txt, ",")[[1]]
+
+selected[[1]]
+
+for(i in 1:length(selected)){
+
+conditions <- var
+
+
+df_plot <- normed_gn %>%
+  filter(GeneName == selected[[i]]) %>%
+  select(-Reference, -Protein.Accession, -Accession_primary)
+
+if (nrow(df_plot) == 0) {
+  message("Skipping missing gene: ", selected[[i]])
+  next
+}
+
+df_long <- df_plot %>%
+  pivot_longer(col = 2:41,
+               names_to = "condition",
+               values_to = "normalized abundance") %>%
+  mutate(condition=conditions)
+
+df_long$condition <- factor(df_long$condition, levels = c("siltuximab baseline", "siltuximab treatment", "tocilizumab baseline","tocilizumab treatment"))
+
+#description_wrapped <- stringr::str_wrap(df_long$Description[[1]], width = 10)
+#description_wrapped <- gsub("\n", "<br>", description_wrapped)
+
+
+ggplot(df_long, aes(x = condition, y = `normalized abundance`, fill = condition)) +
+  stat_summary(fun = mean, 
+               geom = "bar", 
+               color = "black", 
+               width = 0.7, 
+               alpha=0.5) +        
+  stat_summary(fun.data = mean_sdl,
+               fun.args = list(mult=1), 
+               geom = "errorbar", width = 0.2) +            
+  geom_quasirandom(width = 0.2 , size = 2, shape = 21, color = "black") +
+  scale_fill_viridis_d() +
+  #scale_fill_brewer(palette = "Set1") +
+  theme_cowplot() +
+  labs(
+    title  = df_long$GeneName[[1]],
+    #subtitle = stringr::str_wrap(df_long$Description[[1]], width = 35),
+    y = "normalized abundance",
+    x = NULL
+  ) +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+  plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(expand=expansion(mult=c(0,0.1)))
+
+ggsave(paste0("Output/barplots/",df_long$GeneName[[1]],".png"), width=4, height=5)
+}
+```
+
 ## Limma, volcano plots
 
 ### Siltuximab Limma
+
 ```{r}
 
 #Select only siltuximab treatment samples
-num.df <- normed[1:20]
+num.df <- normed_gn[1:20]
 #rownames(num.df) <-s.protein_data[,1]
 
 #Removing 0's because they don't log2
@@ -300,23 +451,43 @@ sig_s_results <- c.s.results[which(c.s.results$adj.P.Val<0.05),]
 #write.csv(c.s.results, "250219 Siltux treatment vs baseline PAIRED extra_median normalized imputed.csv", row.names = TRUE)
 
 
+```
+
+```{r}
+library(ggbreak)
+
 ggplot(c.s.results, aes(x = logFC, y = `-log10_adj_p-val`)) + 
   geom_point(color = "grey80") + 
   theme_cowplot() + 
   geom_point(data = sig_s_results, aes(x = logFC, y = `-log10_adj_p-val`), color = "black") +
-  geom_text_repel(data = sig_s_results, aes(x = logFC, y = `-log10_adj_p-val`, label = gene), 
-                  color = "black", size = 3, box.padding = 0.3) +
-
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_text_repel(
+    data = sig_s_results,
+    aes(x = logFC, y = `-log10_adj_p-val`, label = gene),
+    color = "black",
+    size = 3,
+    box.padding = 0.3,
+    segment.color = "black",
+    max.overlaps = 25,
+    fill = "white",     # gives white background bubble
+    min.segment.length = 0,
+    bg.color = "white", # for ggrepel ≥0.9.3, use bg.color/bg.r
+    bg.r = 0.15         # rounded corners
+  ) +
+
    
-  scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1.5,-1, -0.5, 0, 0.5, 1, 1.5, 2)) + 
-  scale_y_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2, 2.5)) + 
-  theme(axis.title = element_blank())
-ggsave("Output/250227_siltux_volcano.svg", width=6, height = 8)
-write.csv(c.s.results,"Output/siltux_limma.csv")
+  scale_x_continuous(limits = c(-4, 4), breaks = seq(-4, 4, 1)) + 
+  scale_y_continuous(limits = c(0, 4.5), breaks = seq(0, 4.5, 0.5)) + 
+  scale_y_break(c(2.2,3.4)) +
+
+  labs(x="Siltuximab log2(treatment/baseline)", y="-log10(adj. P-value)")
+
+ggsave("Output/251205_siltux_volcano.pdf", width=4, height = 4)
+#write.csv(c.s.results,"Output/siltux_limma.csv")
 ```
 
 ### Tocilizumab Limma
+
 ```{r}
 num.df <- normed[21:40]
 #rownames(num.df) <-t.protein_data[,1]
@@ -366,24 +537,41 @@ c.t.results <- c.t.results %>% mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.nam
 
 sig_t_results <- c.t.results[which(c.t.results$adj.P.Val<0.05),]
 
+```
+
+```{r}
 ggplot(c.t.results, aes(x = logFC, y = `-log10_adj_p-val`)) + 
   geom_point(color = "grey80") + 
   theme_cowplot() + 
   geom_point(data = sig_t_results, aes(x = logFC, y = `-log10_adj_p-val`), color = "black") +
-  geom_text_repel(data = sig_t_results, aes(x = logFC, y = `-log10_adj_p-val`, label = gene), 
-                  color = "black", size = 3, box.padding = 0.3, max.overlaps = 15) +
-
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_text_repel(
+    data = sig_t_results,
+    aes(x = logFC, y = `-log10_adj_p-val`, label = gene),
+    color = "black",
+    size = 3,
+    box.padding = 0.3,
+    segment.color = "black",
+    max.overlaps = 25,
+    fill = "white",     # gives white background bubble
+    min.segment.length = 0,
+    bg.color = "white", # for ggrepel ≥0.9.3, use bg.color/bg.r
+    bg.r = 0.15         # rounded corners
+  ) +
   
-  scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1.5,-1, -0.5, 0, 0.5, 1, 1.5, 2)) + 
-  scale_y_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2, 2.5)) + 
-  theme(axis.title = element_blank())
-ggsave("Output/250227_tocil_volcano.svg", width=6, height = 8)
+  
 
-write.csv(c.t.results,"Output/tocil_limma.csv")
+  
+  scale_x_continuous(limits = c(-4, 4), breaks = seq(-4, 4, 1)) + 
+  scale_y_continuous(limits = c(0, 4.5), breaks = seq(0, 4.5, 0.5)) + 
+  scale_y_break(c(2.2,3.4)) +
+  
+  labs(x="Tocilizumab log2(treatment/baseline)", y="-log10(adj. P-value)")
+ggsave("Output/251205_tocil_volcano.pdf", width=4, height = 4)
+
+#write.csv(c.t.results,"Output/tocil_limma.csv")
 
 ```
-
 
 ## Statistical propogation for bar plots
 
@@ -391,21 +579,21 @@ From Wu, et al. 2024 (2023?)
 
 Converting 95% CI to standard error:
 
-  $$SE_{FC} = \frac{FC_{max} - FC_{min}}{\ 3.92}$$
+$$SE_{FC} = \frac{FC_{max} - FC_{min}}{\ 3.92}$$
 
 Converting standard error to standard deviation:
 
-  $$SD_{FC} = \frac{SE_{FC}}{\sqrt{\frac{1}{n_{EV}}+\frac{1}{n_{Plasma}}}}$$
-  
-  
+$$SD_{FC} = \frac{SE_{FC}}{\sqrt{\frac{1}{n_{EV}}+\frac{1}{n_{Plasma}}}}$$
+
 Taking into account Log2 transformation on standard deviation:
 
-  $$SD_{Log_{2}FC} = \frac{1}{ln(2)}*\frac{SD_{FC}}{FC}$$
+$$SD_{Log_{2}FC} = \frac{1}{ln(2)}*\frac{SD_{FC}}{FC}$$
 
-- Requires identified significant proteins from Limma
-- Requires all_proteins_ratios
+-   Requires identified significant proteins from Limma
+-   Requires all_proteins_ratios
 
 ### Preparing ratios from normalized data
+
 ```{r}
 df <- normed
 
@@ -420,6 +608,7 @@ all_proteins_ratios <- cbind(Siltux_ratio, Tocil_ratio)
 ```
 
 #### Sorting out what's significant
+
 ```{r}
 sig_s_list <- sig_s_results$gene
 sig_t_list <- sig_t_results$gene
@@ -428,9 +617,8 @@ sig_t_only <- setdiff(sig_t_list, sig_s_list)
 sig_both <- intersect(sig_s_list, sig_t_list)
 sig_all <- union(sig_s_list, sig_t_list)
 
-
+write.csv(sig_all, "sig_all.csv")
 ```
-
 
 ```{r}
 CI_SEwidth <- (2*1.96)
@@ -467,20 +655,468 @@ write.csv(df_both, "Output/250416_both.csv")
 write.csv(df_sig_all, "Output/sig_all.csv")
 ```
 
-####Put some nice ggbar plots here
-```{r}
+## Heatmaps
 
+```{r}
+df <- normed 
+#df <- df %>%
+  #mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.names(df))) %>%
+  #filter(gene %in% sig_all)
+  
+
+txt <- "TBK1,SAA1,SQSTM1,PSMD6,PSMD13,PSMC1,PSMD2,PSMD8,IKBKB,IRAK4,PSMC5,PSMD12,PSMC2,PSMD14,RBX1,PSMC3,PSMB5,PSMC4,UBB,NFKB1,PSMD1,PSMC6,GSDMD,PSMB6,MAP3K7,PSMA5,PSMD11,PSMB4,PSMB3,PSMA4,PSMB7,PSMA7,PELI1,PSMA2,PSMB2,PSMA1,PSMA3,PSMA6,USP14"
+
+selected <- strsplit(txt, ",")[[1]]
+
+df <- normed_gn %>%
+  filter(GeneName %in% selected)
+  
+row.names(df) <- df$GeneName
+colnames(df) <- substr(colnames(df), 1, 3)
+
+df_siltux <- df[4:23]
+df_tocil <- df[24:43]
+df_siltux_scale <- t(scale(t(df_siltux)))
+df_tocil_scale <- t(scale(t(df_tocil)))
+
+pre_treatment <- c(Siltux_baseline_sequence, Tocil_baseline_sequence)
+treatment_status_siltux <- ifelse(colnames(df_siltux) %in% pre_treatment, "Pre", "Post") %>%
+  factor(., levels=c("Pre", "Post"))
+treatment_status_tocil <- ifelse(colnames(df_tocil) %in% pre_treatment, "Pre", "Post")%>%
+  factor(., levels=c("Pre", "Post"))
+
+treatment_annot_siltux <- HeatmapAnnotation(
+  Treatment = treatment_status_siltux,
+  col = list(Treatment = c("Pre" = "#FFBE45", "Post" = "#DD4AC0"))
+)
+
+treatment_annot_tocil <-HeatmapAnnotation(
+  Treatment = treatment_status_tocil,
+  col = list(Treatment = c("Pre" = "#FFBE45", "Post" = "#DD4AC0"))
+)
+```
+
+```{r}
+pdf("Output/251152_heatmap_IL1_family_siltux.pdf", width=10, height=15)
+
+
+Heatmap(df_siltux_scale,
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        column_names_side = "top",
+        color = colorRampPalette(c("blue", "white", "red"))(100),
+        top_annotation = treatment_annot_siltux)
+dev.off()
+
+pdf("Output/251152_heatmap_IL1_family_tocil.pdf", width=10, height=15)
+
+Heatmap(df_tocil_scale,
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        column_names_side = "top",
+        color = colorRampPalette(c("blue", "white", "red"))(100),
+        top_annotation = treatment_annot_tocil)
+dev.off()
 
 ```
 
+## X-Y Limma results
 
-## Heatmaps
+merge Limma datasets
+
+```{r}
+
+c.t.results <- c.t.results %>%
+  mutate(ID = row.names(c.t.results))
+merge <- left_join(c.t.results, c.s.results, by="gene",suffix=c(".t",".s")) %>%
+  mutate(UniProtID = str_extract(ID, "(?<=\\|)[A-Z0-9]+"))
+
+merge_sig_t <- merge %>%
+  filter(adj.P.Val.t <0.05)
+merge_sig_s <- merge %>%
+  filter(adj.P.Val.s <0.05)
+merge_sig_both <- merge %>%
+  filter(adj.P.Val.t < 0.05 & adj.P.Val.s <0.05)
+merge_sig_neither <- merge %>%
+  filter(adj.P.Val.t > 0.05 & adj.P.Val.s >0.05)
+merge_sig_either <- merge %>%
+  filter(adj.P.Val.t < 0.05 | adj.P.Val.s < 0.05)
+
+treatment_correlation <- cor(merge$logFC.t, merge$logFC.s, method="spearman")
+sig_correlation <- cor(merge_sig_either$logFC.t, merge_sig_either$logFC.s)
+
+#write.csv(merge,"250731_results.csv")
+```
+
+```{r}
+ggplot(merge_sig_neither, aes(x=logFC.t, y=logFC.s))+
+  geom_point(color="grey65",
+             size=2,alpha=0.5,stroke=0)+
+  geom_vline(xintercept=0,linetype="dashed", color="black")+
+  geom_hline(yintercept=0,linetype="dashed", color="black")+
+  theme_cowplot()+
+  geom_point(data=merge_sig_t, aes(x=logFC.t, y=logFC.s),
+             color = "#1592ed", size=2,stroke=0)+
+   geom_point(data=merge_sig_s, aes(x=logFC.t, y=logFC.s),
+             color = "#d72e19", size=2,stroke=0)+
+  geom_point(data=merge_sig_both,  aes(x=logFC.t, y=logFC.s),
+             color = "#6416df", size=2,stroke=0)+
+  
+  geom_text_repel(data=merge_sig_either, aes(x=logFC.t, y=logFC.s,
+                                        label = gene),
+    color = "black",
+    size = 3,
+    fontface = "bold",
+    box.padding = 0.5,
+    segment.color = "black",
+    max.overlaps = 25,
+    fill = "white",     # gives white background bubble
+    min.segment.length = 0,
+    bg.color = "white", # for ggrepel ≥0.9.3, use bg.color/bg.r
+    bg.r = 0.15         # rounded corners
+  ) + 
+  
+  
+
+ 
+  labs(x="Tocilizumab log2(treatment/baseline)", y="Siltuximab log2(treatment/baseline)")
+  
+ggsave("251024_XY.pdf", width=5,height=5)
+```
+
+## patient by patient correlation
+
+Which patients across cohorts are the same individuals: - T01/S01 - T03/S13 - T05/S05 - T07/S09 - T09/S19
+
+### Start by filtering dataframe to these 10 samples
+
+```{r}
+pts_baseline <- list("T01", "S01", "T03", "S13", "T05", "S05", "T07", "S09", "T09", "S19")
+
+pts_treatment <- list("T02","S02","T04","S14","T06","S06","T08","S10","T10","S20")
+
+df_pts_baseline <- normed %>%
+  select(matches(paste(pts_baseline, collapse = "|"))) %>%
+  na.omit()
+
+df_pts_treatment <- normed %>%
+  select(matches(paste(pts_treatment, collapse = "|"))) %>%
+  na.omit()
+
+df_all <- normed %>%
+  na.omit()
+```
+
+Next, compute each pairwise correlation.
+
+```{r}
+corrs_baseline <- cor(df_pts_baseline, method = "spearman")
+corrs_treatment <- cor(df_pts_treatment)
+corrs_all <- cor(df_all, method = "spearman")
+```
+
+Once again, an unsupervised clustering heatmap
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+i=1
+j=1
+
+pdf("Output/250822_pts_baseline.pdf", width = 12, height = 12)
+
+col_fun <- colorRamp2(c(0.8, 0.9, 1), c("blue", "white", "red"))
+
+Heatmap(
+  corrs_baseline,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  column_names_side = "top",
+  col = col_fun,
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(
+      round(corrs_baseline[i, j], 3),  # value rounded to 3 decimals
+      x, y,
+      gp = gpar(fontsize = 15)          # adjust text size as needed
+    )
+  }
+)
+
+dev.off()
+```
+
+```{r}
+
+df_pt1_norm <- as.data.frame(cbind(normed$T09_39, normed$S19_55))  %>%
+  na.omit()
+
+plot(df_pt1_norm$V1, df_pt1_norm$V2)
+cor <- cor(as.numeric(df_pt1_norm$V1), as.numeric(df_pt1_norm$V2))
+```
+
+```{r}
+ggplot(df_pt1_norm, aes(x = log10(V1), y = log10(V2))) +
+  geom_point(alpha = 0.6, color = "black") +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "blue") +
+   theme_cowplot() +
+  labs(x = "2016 baseline, log10 signal", y = "2017 baseline, log10 signal", title = "Same patient, blood drawn a year apart")
+
+ggsave("ptT09-S19.pdf", height=5,width=5)
+```
+
+## PCA
+
+```{r}
+normed_na_omit <- normed %>%
+  na.omit()
+
+PCA <- prcomp(t(normed_na_omit))
+PCA_x <- as.data.frame(PCA$x)
+PCA_prots <- as.data.frame(PCA$center)
+write.csv(PCA_prots,"251002_PCA.csv")
+
+color_pal <- c(rep(c("#F9E0D9","#DA4167"),times=10),rep(c("#89A9E4","#0A369D"), times=10))
+
+color_pal <-rep(c("#F192AA","#DA4167","#89A9E4","#0A369D"), each=10)
+
+plot_ly(x=PCA_x$PC1,
+        y=PCA_x$PC2, 
+        name = row.names(PCA_x),
+        marker = list(color = color_pal, size = 9)
+) %>%
+  layout(title="PCA",
+         xaxis=list(title="PCA1"),
+         yaxis=list(title="PCA2"))
+
+ggplot(PCA_x, aes(x=PC1, y=PC2))+
+  geom_point(color=color_pal,
+             size=4,stroke=0)+
+  #geom_smooth(method="lm", color="black",se=TRUE)+
+  theme_cowplot()+
+  #geom_point(data=merge_sig_t, aes(x=logFC.t, y=logFC.s),
+            # color = "#D72638", size=2,alpha=0.5,stroke=0)+
+  # geom_point(data=merge_sig_s, aes(x=logFC.t, y=logFC.s),
+            # color = "#377EB8", size=2,alpha=0.5,stroke=0)+
+  
+
+  labs(x="PC1", y="PC2")
+  
+ggsave("251024_PCA.pdf", width=5,height=4)
+```
+
+#### Histogram of PC1
+
+```{r}
+prefixes <- c(Siltux_baseline_sequence, Tocil_baseline_sequence)
+pattern <- paste(prefixes, collapse = "|")  
+PCA_pre <- PCA_x %>%
+  filter(grepl(pattern, rownames(PCA_x)))
+
+prefixes <- c(Siltux_treat_sequence, Tocil_treat_sequence)
+pattern <- paste(prefixes, collapse = "|") 
+PCA_post <- PCA_x %>%
+  filter(grepl(pattern, rownames(PCA_x)))
+
+hist_pval <- var.test(PCA_post$PC1,PCA_pre$PC1)
+
+ggplot(PCA_pre, aes(x=PC1))+
+  
+  geom_density(data=PCA_post, (aes(x=PC1)),
+               fill="#8833FF",alpha=0.6)+
+  geom_density(fill="#CFADFF", alpha=0.6)+
+  theme_cowplot()
+
+ggsave("251024_PC1.pdf",width=5,height=2)
+```
+
+## FGSEA - log2FC
+
+-   Fetch FGSEA code
+-   Download human database
+-   prepare rnk file (gene symbol, ranking metric)
+
+Notes: reactome pathway shows IL1 signaling decreased only for tocil... and only one of the reactome sets
+
+### Initializing fgsea:
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("reactome.db")
+```
+
+```{r}
+library(fgsea)
+library(reactome.db)
+```
+
+### Code for fgsea (tocil, log2FC):
+
+```{r}
+# initial seed set
+#my_seed <- sample.int(.Machine$integer.max, 1)
+# permanent seed moving forward:
+my_seed = 573953901
+
+set.seed(my_seed)
+
+ranks <- read.table("input/Tocil_gene_name.rnk",
+                    header=FALSE, colClasses = c("character", "numeric")) 
+
+ranks <- ranks[!duplicated(ranks$V1), ]
+ranks <- na.omit(ranks)
+
+ranks <- setNames(ranks$V2, ranks$V1)
+str(ranks)
+
+#pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
+pathways <- gmtPathways("input/ReactomePathways.gmt")
+#pathways <- reactomePathways(names(exampleRanks))
+str(head(pathways))
+
+fgseaRes <- fgsea(pathways,ranks, minSize=5,maxSize=500)
+head(fgseaRes)
+
+fgsea_tocil <- fgseaRes %>%
+  #mutate(hits = lengths(leadingEdge)) %>%
+  dplyr::mutate(leadingEdge = purrr::map_chr(leadingEdge, ~ paste(.x, collapse = ",")))
+  #dplyr::select(-leadingEdge)
+
+write.csv(fgsea_tocil, "Output/fgsea_tocil_log2FC_reactome.csv")
+topPathwaysUp <- fgseaRes[ES > 0][head(order(pval), n=10), pathway]
+topPathwaysDown <- fgseaRes[ES < 0][head(order(pval), n=10), pathway]
+
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+plotGseaTable(pathways[topPathways], ranks, fgseaRes, 
+              gseaParam=0.5)
+```
+
+### Fgsea, siltux
+
+```{r}
+
+set.seed(my_seed)
+
+ranks <- read.table("input/Siltux_gene_name.rnk",
+                    header=FALSE, colClasses = c("character", "numeric"))
+ranks <- ranks[!duplicated(ranks$V1), ]
+ranks <- na.omit(ranks)
+ranks <- setNames(ranks$V2, ranks$V1)
+
+str(ranks)
+
+
+#pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
+pathways <- gmtPathways("input/ReactomePathways.gmt")
+str(head(pathways))
+
+fgseaRes <- fgsea(pathways,ranks, minSize=5,maxSize=500)
+head(fgseaRes)
+
+fgsea_siltux <- fgseaRes %>%
+  #mutate(hits = lengths(leadingEdge)) %>%
+  dplyr::mutate(leadingEdge = purrr::map_chr(leadingEdge, ~ paste(.x, collapse = ",")))
+  #dplyr::select(-leadingEdge)
+
+
+write.csv(fgsea_siltux, "Output/fgsea_siltux_log2FC_reactome.csv")
+topPathwaysUp <- fgseaRes[ES > 0][head(order(pval), n=10), pathway]
+topPathwaysDown <- fgseaRes[ES < 0][head(order(pval), n=10), pathway]
+
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+plotGseaTable(pathways[topPathways], ranks, fgseaRes, 
+              gseaParam=0.5)
+```
+
+### fgsea plotting
+
+```{r}
+library(stringr)
+
+df <- fgsea_tocil #%>%
+  #filter(grepl("Interleukin", pathway, ignore.case = TRUE))
+
+df_top5_up <- df %>%
+  filter(ES >0) %>%
+  #filter(padj<0.5)%>%
+  arrange(desc(NES))%>%
+  dplyr::slice(1:20) %>%
+  arrange(desc(NES))
+
+df_top5_down <- df %>%
+  filter(ES <0) %>%
+  #filter(padj<0.5)%>%
+  arrange(NES)%>%
+  dplyr::slice(1:20) %>%
+  arrange(desc(NES))
+
+df_top10 <- rbind(df_top5_up, df_top5_down) %>%
+  mutate(label = paste(pathway),
+         label_wrapped = str_wrap(label,width=100))
+library(cowplot)
+
+df_top10_down <- df %>%
+  filter(ES <0) %>%
+  filter(padj<0.1)%>%
+  arrange(NES)%>%
+  dplyr::slice(1:10) %>%
+  arrange(desc(NES)) %>%
+  mutate(label=pathway,
+  label_wrapped = str_wrap(label,width=8))%>%
+  mutate(hits = lengths(leadingEdge))
+
+
+
+
+color_limits <- c(0,0.05)
+
+
+
+ggplot(df_top10, aes(x = reorder(label_wrapped, NES), y = NES, fill = padj)) +
+  theme_cowplot()+
+  geom_col() +
+  coord_flip() + 
+  scale_fill_gradient(low = "red", high="blue", limits = color_limits, name="Adjusted p-value")+
+  labs(
+    #title = "Top 10 regulated pathways from H2F treatment",
+    x = "Pathway",
+    y = "Normalized Enrichment Score (NES)"
+  ) +
+
+  theme(
+    axis.text.y = element_text(size = 11, lineheight = 1),  # more line spacing
+    plot.margin = margin(t = 10, r = 30, b = 10, l = 100)     # more room on the left
+  )
+
+ggsave("251002_tocil_fgsea.svg", width=12, height=10)
+```
+
+### Heatmap of interleukin 1 signaling
+
+```{r}
+#IL-1 leading edge from fgsea
+IL1 <- fgsea_tocil %>%
+  filter(pathway == "Interleukin-1 family signaling") %>%
+  pull(leadingEdge) %>%
+  strsplit(",") %>%
+  unlist()
+
+```
 
 ```{r}
 df <- normed 
 df <- df %>%
   mutate(gene = sub(".*\\|(.*?)_.*", "\\1", row.names(df))) %>%
-  filter(gene %in% sig_all)
+  filter(gene %in% IL1)
 
 row.names(df) <- df$gene
 colnames(df) <- substr(colnames(df), 1, 3)
@@ -507,9 +1143,9 @@ treatment_annot_tocil <-HeatmapAnnotation(
 )
 ```
 
-
 ```{r}
-pdf("Output/250416_heatmap_siltux.pdf", width=10, height=15)
+
+pdf("Output/251111_heatmap_siltux_IL1.pdf", width=10, height=15)
 
 
 Heatmap(df_siltux_scale,
@@ -522,7 +1158,7 @@ Heatmap(df_siltux_scale,
         top_annotation = treatment_annot_siltux)
 dev.off()
 
-pdf("Output/250416_heatmap_tocil.pdf", width=10, height=15)
+pdf("Output/251111_heatmap_tocil_IL1.pdf", width=10, height=15)
 
 Heatmap(df_tocil_scale,
         cluster_rows = TRUE,
@@ -533,6 +1169,573 @@ Heatmap(df_tocil_scale,
         color = colorRampPalette(c("blue", "white", "red"))(100),
         top_annotation = treatment_annot_tocil)
 dev.off()
-
 ```
 
+### Merging the sets
+
+```{r}
+merge <- left_join(fgsea_tocil, fgsea_siltux, by="pathway",suffix=c(".t",".s"))
+
+
+merge_sig_t <- merge %>%
+  filter(padj.t <0.05)
+merge_sig_s <- merge %>%
+  filter(padj.s <0.05)
+merge_sig_both <- merge %>%
+  filter(padj.t < 0.05 & padj.s <0.05)
+merge_sig_neither <- merge %>%
+  filter(padj.t > 0.05 & padj.s >0.05)
+merge_sig_either <- merge %>%
+  filter(padj.t < 0.05 | padj.s < 0.05)
+
+df_merged <- as.data.frame(merge)
+
+df_merged %>%
+  #select(-where(is.list)) %>%
+  write.csv("Output/fgsea_log2FC_reactome.csv", row.names = FALSE, na = "")
+```
+
+Filter the merged set of pathways to top 5
+
+```{r}
+quad_1_t <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_1_s <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+quad_2_t <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_2_s <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+quad_3_t <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_3_s <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+quad_4_t <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_4_s <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+labels <- list(
+  quad_1_t, quad_1_s, quad_2_t, quad_2_s,
+  quad_3_t, quad_3_s, quad_4_t, quad_4_s
+) |>
+  lapply(as.data.frame) |>
+  dplyr::bind_rows() |>
+  dplyr::select(where(~ !is.list(.))) |>
+  dplyr::distinct(pathway, .keep_all = TRUE)
+labels <- labels %>%
+  mutate(label_wrapped = str_wrap(pathway, width = 20))  
+```
+
+```{r}
+ggplot(merge_sig_neither, aes(x=NES.t, y=NES.s))+
+  geom_point(color="grey65",
+             size=2,alpha=0.5,stroke=0)+
+  
+  
+  #geom_smooth(data=df_filtered, aes(x=X231_log2FC, y=NGF_log2FC),
+            # color = "#D72638",method="lm", se=FALSE)+
+  theme_cowplot()+
+  geom_point(data=merge_sig_t, aes(x=NES.t, y=NES.s),
+             color = "#377EB8", size=2,stroke=0)+
+   geom_point(data=merge_sig_s, aes(x=NES.t, y=NES.s),
+             color = "#D72638", size=2,stroke=0)+
+  geom_point(data=merge_sig_both,  aes(x=NES.t, y=NES.s),
+             color = "#B870DF", size=2,stroke=0)+
+  
+  geom_text_repel(
+    data = labels,
+    aes(x = NES.t, y = NES.s, label = label_wrapped),
+    color = "black",
+    size = 3,
+    fontface = "bold",
+    box.padding = 0.5,
+    segment.color = "black",
+    max.overlaps = 25,
+    fill = "white",     # gives white background bubble
+    min.segment.length = 0,
+    bg.color = "white", # for ggrepel ≥0.9.3, use bg.color/bg.r
+    bg.r = 0.15         # rounded corners
+  ) +
+  
+  geom_vline(xintercept=0,linetype="dashed", color="black")+
+  geom_hline(yintercept=0,linetype="dashed", color="black")+
+      
+ 
+  labs(x="Tocilizumab NES", y="Siltuximab NES")+
+  theme(plot.margin = margin(t = 10, r = 10, b = 20, l = 20))#+
+  #scale_x_continuous(limits = c(-2., 3), breaks = seq(-3, 3, 1)) +
+  #scale_y_continuous(limits = c(-3, 3), breaks = seq(-3, 3, 1))
+  
+ggsave("251113_fgsea_log2FC_reactome.pdf", width=8,height=8)
+```
+
+### Discordance metric
+
+```{r}
+merge_disc <- merge %>%
+  mutate(discordance = NES.t-NES.s) %>%
+  arrange(discordance) %>%
+  mutate(rank = c(1:nrow(merge)))
+
+merge_disc_top5 <- merge_disc %>%
+  arrange(desc(discordance)) %>%
+  dplyr::slice(1:5)
+
+merge_disc_bottom5 <- merge_disc %>%
+  arrange(discordance) %>%
+  dplyr::slice(1:5)
+
+merge_middle <- merge_disc %>%
+  arrange(abs(discordance)) %>%
+  dplyr::slice(1:5)
+
+merge_10 <- rbind(merge_disc_top5, merge_disc_bottom5, merge_middle) %>%
+  mutate(label_wrapped = str_wrap(pathway, width = 20))  
+
+ggplot(merge_disc, aes(x=rank, y=discordance)) +
+  geom_point() +
+  theme_cowplot() + 
+  geom_text_repel(
+    data = merge_10,
+    aes(x = rank, y = discordance, label = label_wrapped),
+    color = "black",
+    size = 3,
+    fontface = "bold",
+    box.padding = 0.5,
+    segment.color = "black",
+    max.overlaps = 25,
+    fill = "white",     # gives white background bubble
+    min.segment.length = 0,
+    bg.color = "white", # for ggrepel ≥0.9.3, use bg.color/bg.r
+    bg.r = 0.15         # rounded corners
+  ) +
+  labs(x="Rank", y="Discordance metric (NES.t - NES.s)") + 
+  geom_hline(yintercept=0, linetype = "dashed", color = "black")
+
+ggsave("Output/NES discordance.pdf", width=5, height=5)
+```
+
+### Filter to pathways, sum for plotting
+
+-   Neddylation
+
+```{r}
+pathway <- "H2AC4,H2BC26,H2BC21,H4C1,H2BC14,TNRC6A,H3C1,ELANE"
+
+pathway <- strsplit(pathway, ",")[[1]]
+
+df_pathway <- normed_gn %>%
+  filter(GeneName %in% pathway)
+
+df_sums <- df_pathway %>%
+  summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE)))
+
+write.csv(df_sums,"Output/251204_clot formation.csv")
+```
+
+## Correlational analyses
+
+### Siltux
+
+```{r}
+library(dplyr)
+df <- normed
+siltux <- df["Siltux_filtered",]
+
+df <- t(df[,1:20])
+
+siltux <- t(siltux[,1:20])
+i=1
+
+corrs <- data.frame()
+for(i in 1:ncol(df)){
+  name <- colnames(df)[i]
+
+  corr_test <- cor.test(siltux, df[,i], method="pearson")
+  corr <- corr_test$estimate
+  p_val <- corr_test$p.value
+  corrs_add <- data.frame(name, corr, p_val)
+  corrs <- rbind(corrs, corrs_add)
+}
+
+corrs$adj_p_val <- p.adjust(corrs$p_val, method="BH")
+corrs_siltux <- corrs
+corrs_siltux <- left_join(
+  corrs_siltux,
+  all_peptides %>% distinct(Protein, .keep_all = TRUE),
+  by = c("name" = "Protein")
+)
+uniprot <- read.csv("Input/Uniprot_to_gene_name.csv")
+corrs_siltux_GN <- left_join(corrs_siltux,uniprot,
+                            by=c("Protein.Accession"="Entry"))%>%
+  dplyr::select(1:4,59)
+
+write.csv(corrs_siltux_GN, "251024_siltux_corrs_GN_pearson.csv")
+```
+
+### Tocil
+
+```{r}
+df <- normed
+tocil <- df["Tocil_filtered",]
+
+df <- t(df[,21:40])
+
+tocil <- t(tocil[,21:40])
+i=1
+
+corrs <- data.frame()
+for(i in 1:ncol(df)){
+  name <- colnames(df)[i]
+
+  corr_test <- cor.test(tocil, df[,i], method="pearson")
+  corr <- corr_test$estimate
+  p_val <- corr_test$p.value
+  corrs_add <- data.frame(name, corr, p_val)
+  corrs <- rbind(corrs, corrs_add)
+}
+
+corrs$adj_p_val <- p.adjust(corrs$p_val, method="BH")
+corrs_tocil <- corrs
+corrs_tocil <- left_join(
+  corrs_tocil,
+  all_peptides %>% distinct(Protein, .keep_all = TRUE),
+  by = c("name" = "Protein")
+)
+
+uniprot <- read.csv("Input/Uniprot_to_gene_name.csv")
+corrs_tocil_GN <- left_join(corrs_tocil,uniprot,
+                            by=c("Protein.Accession"="Entry"))%>%
+  select(1:4,59)
+
+write.csv(corrs_tocil_GN, "251024_tocil_corrs_GN_pearson.csv")
+```
+
+### plot
+
+```{r}
+corrs_siltux_GN <- na.omit(corrs_siltux_GN) %>%
+  filter(GeneName != "#VALUE!")
+
+sig_corr_siltux <- corrs_siltux_GN[which(corrs_siltux_GN$adj_p_val<0.05),]
+
+ggplot(corrs_siltux_GN, aes(x = corr, y = -log10(adj_p_val))) + 
+  geom_point(color = "grey80") + 
+  theme_cowplot() + 
+  geom_point(data = sig_corr_siltux, aes(x = corr, y = -log10(adj_p_val)), color = "black") +
+  geom_text_repel(data = sig_corr_siltux, aes(x = corr, y = -log10(adj_p_val), label = GeneName), 
+                  color = "black", size = 3, box.padding = 0.3) +
+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+   
+  #scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1.5,-1, -0.5, 0, 0.5, 1, 1.5, 2)) + 
+  #scale_y_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2, 2.5)) + 
+  labs(x="Spearman rho", y="-log10(adj. P-value)")
+ggsave("Output/251024_siltux_corr_R.pdf", width=5, height = 6)
+```
+
+```{r}
+corrs_tocil_GN <- na.omit(corrs_tocil_GN) %>%
+  filter(GeneName != "#VALUE!")
+
+sig_corr_tocil <- corrs_tocil_GN[which(corrs_tocil_GN$adj_p_val<0.05),]
+
+ggplot(corrs_tocil_GN, aes(x = corr, y = -log10(adj_p_val))) + 
+  geom_point(color = "grey80") + 
+  theme_cowplot() + 
+  geom_point(data = sig_corr_tocil, aes(x = corr, y = -log10(adj_p_val)), color = "black") +
+  geom_text_repel(data = sig_corr_tocil, aes(x = corr, y = -log10(adj_p_val), label = GeneName), 
+                  color = "black", size = 3, box.padding = 0.3) +
+
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+   
+  #scale_x_continuous(limits = c(-2, 2), breaks = c(-2, -1.5,-1, -0.5, 0, 0.5, 1, 1.5, 2)) + 
+  #scale_y_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2, 2.5)) + 
+  labs(x="Spearman rho", y="-log10(adj. P-value)")
+ggsave("Output/251024_tocil_corr_rho.pdf", width=5, height = 6)
+```
+
+### FGSEA - correlation
+
+-   Fetch FGSEA code
+-   Download human database
+-   prepare rnk file (gene symbol, ranking metric)
+
+Notes: reactome pathway shows IL1 signaling decreased only for tocil... and only one of the reactome sets
+
+### Initializing fgsea:
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("reactome.db")
+```
+
+```{r}
+library(fgsea)
+library(reactome.db)
+```
+
+### Code for fgsea (tocil, corr):
+
+```{r}
+ranks <- read.table("input/tocil_R.rnk",
+                    header=FALSE, colClasses = c("character", "numeric")) 
+
+ranks <- ranks[!duplicated(ranks$V1), ]
+ranks <- na.omit(ranks)
+
+ranks <- setNames(ranks$V2, ranks$V1)
+str(ranks)
+
+
+pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
+#pathways <- gmtPathways("input/ReactomePathways.gmt")
+
+str(head(pathways))
+
+fgseaRes <- fgsea(pathways,ranks, minSize=5,maxSize=500)
+head(fgseaRes)
+
+fgsea_tocil <- fgseaRes %>%
+  #mutate(hits = lengths(leadingEdge)) %>%
+  dplyr::select(-leadingEdge)
+
+write.csv(fgsea_tocil, "Output/fgsea_all_tocil_R_compartment.csv")
+topPathwaysUp <- fgseaRes[ES > 0][head(order(pval), n=10), pathway]
+topPathwaysDown <- fgseaRes[ES < 0][head(order(pval), n=10), pathway]
+
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+plotGseaTable(pathways[topPathways], ranks, fgseaRes, 
+              gseaParam=0.5)
+```
+
+### Fgsea, siltux
+
+```{r}
+ranks <- read.table("input/siltux_R.rnk",
+                    header=FALSE, colClasses = c("character", "numeric"))
+ranks <- ranks[!duplicated(ranks$V1), ]
+ranks <- na.omit(ranks)
+ranks <- setNames(ranks$V2, ranks$V1)
+
+str(ranks)
+
+pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
+#pathways <- gmtPathways("input/ReactomePathways.gmt")
+str(head(pathways))
+
+fgseaRes <- fgsea(pathways,ranks, minSize=5,maxSize=500)
+head(fgseaRes)
+
+fgsea_siltux <- fgseaRes%>%
+  #mutate(hits = lengths(leadingEdge))%>%
+  dplyr::select(-leadingEdge)
+
+write.csv(fgsea_siltux, "Output/fgsea_all_siltux_rho.csv")
+topPathwaysUp <- fgseaRes[ES > 0][head(order(pval), n=10), pathway]
+topPathwaysDown <- fgseaRes[ES < 0][head(order(pval), n=10), pathway]
+
+topPathways <- c(topPathwaysUp, rev(topPathwaysDown))
+plotGseaTable(pathways[topPathways], ranks, fgseaRes, 
+              gseaParam=0.5)
+```
+
+### plotting
+
+```{r}
+library(stringr)
+
+df <- fgsea_tocil #%>%
+  #filter(grepl("Interleukin", pathway, ignore.case = TRUE))
+
+df_top5_up <- df %>%
+  filter(ES >0) %>%
+  #filter(padj<0.5)%>%
+  arrange(desc(NES))%>%
+  dplyr::slice(1:20) %>%
+  arrange(desc(NES))
+
+df_top5_down <- df %>%
+  filter(ES <0) %>%
+  #filter(padj<0.5)%>%
+  arrange(NES)%>%
+  dplyr::slice(1:20) %>%
+  arrange(desc(NES))
+
+df_top10 <- rbind(df_top5_up, df_top5_down) %>%
+  mutate(label = paste(pathway),
+         label_wrapped = str_wrap(label,width=100))
+library(cowplot)
+
+df_top10_down <- df %>%
+  filter(ES <0) %>%
+  filter(padj<0.1)%>%
+  arrange(NES)%>%
+  dplyr::slice(1:10) %>%
+  arrange(desc(NES)) %>%
+  mutate(label=pathway,
+  label_wrapped = str_wrap(label,width=8))
+
+
+
+
+color_limits <- c(0,0.05)
+
+
+
+ggplot(df_top10, aes(x = reorder(label_wrapped, NES), y = NES, fill = padj)) +
+  theme_cowplot()+
+  geom_col() +
+  coord_flip() + 
+  scale_fill_gradient(low = "red", high="blue", limits = color_limits, name="Adjusted p-value")+
+  labs(
+    #title = "Top 10 regulated pathways from H2F treatment",
+    x = "Pathway",
+    y = "Normalized Enrichment Score (NES)"
+  ) +
+
+  theme(
+    axis.text.y = element_text(size = 11, lineheight = 1),  # more line spacing
+    plot.margin = margin(t = 10, r = 30, b = 10, l = 100)     # more room on the left
+  )
+
+ggsave("251028_tocil_fgsea_rho.svg", width=12, height=10)
+```
+
+```{r}
+merge <- left_join(fgsea_tocil, fgsea_siltux, by="pathway",suffix=c(".t",".s"))
+
+
+merge_sig_t <- merge %>%
+  filter(padj.t <0.05)
+merge_sig_s <- merge %>%
+  filter(padj.s <0.05)
+merge_sig_both <- merge %>%
+  filter(padj.t < 0.05 & padj.s <0.05)
+merge_sig_neither <- merge %>%
+  filter(padj.t > 0.05 & padj.s >0.05)
+merge_sig_either <- merge %>%
+  filter(padj.t < 0.05 | padj.s < 0.05)
+
+df_merged <- as.data.frame(merge)
+
+df_merged %>%
+  #select(-where(is.list)) %>%
+  write.csv("Output/fgsea_R_compartment.csv", row.names = FALSE, na = "")
+```
+
+Filter the merged set of pathways to top 5
+
+```{r}
+quad_1_t <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_1_s <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+quad_2_t <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_2_s <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s >0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+quad_3_t <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_3_s <- merge_sig_either %>%
+  filter(NES.t > 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+quad_4_t <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.t))) %>%
+  dplyr::slice(1:5)
+quad_4_s <- merge_sig_either %>%
+  filter(NES.t < 0 & NES.s < 0) %>%
+  arrange(desc(abs(NES.s))) %>%
+  dplyr::slice(1:5)
+
+labels <- list(
+  quad_1_t, quad_1_s, quad_2_t, quad_2_s,
+  quad_3_t, quad_3_s, quad_4_t, quad_4_s
+) |>
+  lapply(as.data.frame) |>
+  dplyr::bind_rows() |>
+  dplyr::select(where(~ !is.list(.))) |>
+  dplyr::distinct(pathway, .keep_all = TRUE)
+labels <- labels %>%
+  mutate(label_wrapped = str_wrap(pathway, width = 20))  
+```
+
+```{r}
+ggplot(merge_sig_neither, aes(x=NES.t, y=NES.s))+
+  geom_point(color="grey65",
+             size=2,alpha=0.5,stroke=0)+
+  
+  
+  #geom_smooth(data=df_filtered, aes(x=X231_log2FC, y=NGF_log2FC),
+            # color = "#D72638",method="lm", se=FALSE)+
+  theme_cowplot()+
+  geom_point(data=merge_sig_t, aes(x=NES.t, y=NES.s),
+             color = "#377EB8", size=2,stroke=0)+
+   geom_point(data=merge_sig_s, aes(x=NES.t, y=NES.s),
+             color = "#D72638", size=2,stroke=0)+
+  geom_point(data=merge_sig_both,  aes(x=NES.t, y=NES.s),
+             color = "#B870DF", size=2,stroke=0)+
+  
+ geom_text_repel(
+    data = labels,
+    aes(x = NES.t, y = NES.s, label = label_wrapped),
+    color = "black",
+    size = 3,
+    fontface = "bold",
+    box.padding = 0.5,
+    segment.color = "black",
+    max.overlaps = 25,
+    fill = "white",     # gives white background bubble
+    min.segment.length = 0,
+    bg.color = "white", # for ggrepel ≥0.9.3, use bg.color/bg.r
+    bg.r = 0.15         # rounded corners
+  ) +
+  
+  geom_vline(xintercept=0,linetype="dashed", color="black")+
+  geom_hline(yintercept=0,linetype="dashed", color="black")+
+      
+ 
+  labs(x="Tocilizumab NES", y="Siltuximab NES")+
+  theme(plot.margin = margin(t = 10, r = 10, b = 20, l = 20))#+
+  #scale_x_continuous(limits = c(-2., 3), breaks = seq(-3, 3, 1)) +
+  #scale_y_continuous(limits = c(-3, 3), breaks = seq(-3, 3, 1))
+  
+ggsave("251024_fgsea_XY_R_compartment.pdf", width=8,height=8)
+```
