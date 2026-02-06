@@ -21,8 +21,8 @@ library(tidyverse)
 
 ```{r}
 all_peptides <- read.csv("Input/250121_T1D_Serum_EV_Treatment.csv",
-                         header=TRUE, 
-                         na = "#N/A") %>%
+                        header=TRUE, 
+                        na = "#N/A") %>%
   # This protein has significant peptide overlap with Siltuximab
   # It is removed here to avoid spurious results/incorrect quantitation
   # Open to other ideas
@@ -1174,8 +1174,13 @@ dev.off()
 ### Merging the sets
 
 ```{r}
-merge <- left_join(fgsea_tocil, fgsea_siltux, by="pathway",suffix=c(".t",".s"))
+#merge <- left_join(fgsea_tocil, fgsea_siltux, by="pathway",suffix=c(".t",".s"))
 
+library(readxl)
+
+merge <- read_xlsx("Output/fgsea_log2FC_reactome.xlsx", 
+                   sheet = 1, skip =1,
+                   range = cell_limits(c(2, 1), c(NA, 17)))
 
 merge_sig_t <- merge %>%
   filter(padj.t <0.05)
@@ -1190,9 +1195,9 @@ merge_sig_either <- merge %>%
 
 df_merged <- as.data.frame(merge)
 
-df_merged %>%
+#df_merged %>%
   #select(-where(is.list)) %>%
-  write.csv("Output/fgsea_log2FC_reactome.csv", row.names = FALSE, na = "")
+  #write.csv("Output/fgsea_log2FC_reactome.csv", row.names = FALSE, na = "")
 ```
 
 Filter the merged set of pathways to top 5
@@ -1234,9 +1239,12 @@ quad_4_s <- merge_sig_either %>%
   arrange(desc(abs(NES.s))) %>%
   dplyr::slice(1:5)
 
+addtl <- merge_sig_either %>%
+  filter(pathway == "Common Pathway of Fibrin Clot Formation")
+
 labels <- list(
   quad_1_t, quad_1_s, quad_2_t, quad_2_s,
-  quad_3_t, quad_3_s, quad_4_t, quad_4_s
+  quad_3_t, quad_3_s, quad_4_t, quad_4_s, addtl
 ) |>
   lapply(as.data.frame) |>
   dplyr::bind_rows() |>
@@ -1286,7 +1294,7 @@ ggplot(merge_sig_neither, aes(x=NES.t, y=NES.s))+
   #scale_x_continuous(limits = c(-2., 3), breaks = seq(-3, 3, 1)) +
   #scale_y_continuous(limits = c(-3, 3), breaks = seq(-3, 3, 1))
   
-ggsave("251113_fgsea_log2FC_reactome.pdf", width=8,height=8)
+ggsave("260128_fgsea_log2FC_reactome.pdf", width=8,height=8)
 ```
 
 ### Discordance metric
@@ -1500,6 +1508,9 @@ library(reactome.db)
 ### Code for fgsea (tocil, corr):
 
 ```{r}
+my_seed = 573953901
+set.seed(my_seed)
+
 ranks <- read.table("input/tocil_R.rnk",
                     header=FALSE, colClasses = c("character", "numeric")) 
 
@@ -1510,8 +1521,8 @@ ranks <- setNames(ranks$V2, ranks$V1)
 str(ranks)
 
 
-pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
-#pathways <- gmtPathways("input/ReactomePathways.gmt")
+#pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
+pathways <- gmtPathways("input/ReactomePathways.gmt")
 
 str(head(pathways))
 
@@ -1522,7 +1533,7 @@ fgsea_tocil <- fgseaRes %>%
   #mutate(hits = lengths(leadingEdge)) %>%
   dplyr::select(-leadingEdge)
 
-write.csv(fgsea_tocil, "Output/fgsea_all_tocil_R_compartment.csv")
+write.csv(fgsea_tocil, "Output/fgsea_all_tocil_R_reactome.csv")
 topPathwaysUp <- fgseaRes[ES > 0][head(order(pval), n=10), pathway]
 topPathwaysDown <- fgseaRes[ES < 0][head(order(pval), n=10), pathway]
 
@@ -1534,6 +1545,9 @@ plotGseaTable(pathways[topPathways], ranks, fgseaRes,
 ### Fgsea, siltux
 
 ```{r}
+my_seed = 573953901
+set.seed(my_seed)
+
 ranks <- read.table("input/siltux_R.rnk",
                     header=FALSE, colClasses = c("character", "numeric"))
 ranks <- ranks[!duplicated(ranks$V1), ]
@@ -1542,8 +1556,8 @@ ranks <- setNames(ranks$V2, ranks$V1)
 
 str(ranks)
 
-pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
-#pathways <- gmtPathways("input/ReactomePathways.gmt")
+#pathways <- gmtPathways("input/Jensen_COMPARTMENTS.gmt")
+pathways <- gmtPathways("input/ReactomePathways.gmt")
 str(head(pathways))
 
 fgseaRes <- fgsea(pathways,ranks, minSize=5,maxSize=500)
@@ -1553,7 +1567,7 @@ fgsea_siltux <- fgseaRes%>%
   #mutate(hits = lengths(leadingEdge))%>%
   dplyr::select(-leadingEdge)
 
-write.csv(fgsea_siltux, "Output/fgsea_all_siltux_rho.csv")
+write.csv(fgsea_siltux, "Output/fgsea_all_siltux_R_reactome.csv")
 topPathwaysUp <- fgseaRes[ES > 0][head(order(pval), n=10), pathway]
 topPathwaysDown <- fgseaRes[ES < 0][head(order(pval), n=10), pathway]
 
@@ -1621,7 +1635,7 @@ ggplot(df_top10, aes(x = reorder(label_wrapped, NES), y = NES, fill = padj)) +
     plot.margin = margin(t = 10, r = 30, b = 10, l = 100)     # more room on the left
   )
 
-ggsave("251028_tocil_fgsea_rho.svg", width=12, height=10)
+ggsave("251028_tocil_fgsea_R.svg", width=12, height=10)
 ```
 
 ```{r}
@@ -1643,7 +1657,7 @@ df_merged <- as.data.frame(merge)
 
 df_merged %>%
   #select(-where(is.list)) %>%
-  write.csv("Output/fgsea_R_compartment.csv", row.names = FALSE, na = "")
+  write.csv("Output/fgsea_R_reactome.csv", row.names = FALSE, na = "")
 ```
 
 Filter the merged set of pathways to top 5
@@ -1737,5 +1751,20 @@ ggplot(merge_sig_neither, aes(x=NES.t, y=NES.s))+
   #scale_x_continuous(limits = c(-2., 3), breaks = seq(-3, 3, 1)) +
   #scale_y_continuous(limits = c(-3, 3), breaks = seq(-3, 3, 1))
   
-ggsave("251024_fgsea_XY_R_compartment.pdf", width=8,height=8)
+ggsave("260206_fgsea_XY_R_reactome.pdf", width=8,height=8)
+```
+
+Merge
+
+```{r}
+fgsea_R_tocil <- read.csv("Output/fgsea_tocil_cor.csv")
+fgsea_R_siltux <- read.csv("Output/fgsea_siltux_cor.csv")
+
+
+merge_R <- left_join(fgsea_R_tocil, fgsea_R_siltux, by="pathway", suffix = c(".tocil",".siltux"))
+
+#write.csv(merge_R, "Output/fgsea_pearson_reactome.csv")
+
+ggplot(merge_R, aes(x=NES.tocil, y=NES.siltux))+
+  geom_point()
 ```
