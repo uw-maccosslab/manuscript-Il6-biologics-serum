@@ -1965,3 +1965,41 @@ merge <- left_join(fgsea_l2FC_tocil, fgsea_l2FC_siltux, by="pathway", suffix = c
 #ggplot(merge_R, aes(x=NES.tocil, y=NES.siltux))+
  # geom_point()
 ```
+
+
+## Concordance analysis
+
+```{r}
+# toci and silt: limma topTable output, one row per protein group,
+# with columns logFC and adj.P.Val, rownames = protein group ID
+
+limma_results <- read.csv("Output/limma_results.csv")
+
+#both <- inner_join(
+#  toci %>% tibble::rownames_to_column("protein") %>%
+#           select(protein, logFC_T = logFC, adjP_T = adj.P.Val),
+#  silt %>% tibble::rownames_to_column("protein") %>%
+#           select(protein, logFC_S = logFC, adjP_S = adj.P.Val),
+#  by = "protein"
+#) %>%
+#  filter(!protein %in% c("Siltux", "Tocil"))   # drop the drugs
+
+both <- limma_results %>%
+  filter(!gene %in% c("Siltux_filtered", "Tocil_filtered"))
+
+sig_union <- both %>% filter(adj.P.Val.t < 0.05 | adj.P.Val.s < 0.05)
+sig_toci  <- both %>% filter(adj.P.Val.t < 0.05)
+sig_siltux <- both %>% filter(adj.P.Val.s < 0.05)
+
+concord <- function(d) {
+  agree <- sum(sign(d$logFC.t) == sign(d$logFC.s))
+  n     <- nrow(d)
+  bt    <- binom.test(agree, n, p = 0.5, alternative = "two.sided")
+  list(agree = agree, n = n, pct = round(100 * agree / n, 1), p = bt$p.value)
+}
+
+concord(sig_union)
+concord(sig_toci)
+concord(sig_siltux)
+```
+
