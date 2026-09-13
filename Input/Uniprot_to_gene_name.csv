@@ -212,7 +212,7 @@ Q00577,Q00577,reviewed,PURA_HUMAN,Transcriptional activator protein Pur-alpha (P
 P83731,P83731,reviewed,RL24_HUMAN,Large ribosomal subunit protein eL24 (60S ribosomal protein L24) (60S ribosomal protein L30),RPL24,Homo sapiens (Human),157,RPL24
 P69891,P69891,reviewed,HBG1_HUMAN,Hemoglobin subunit gamma-1 (Gamma-1-globin) (Hb F Agamma) (Hemoglobin gamma-1 chain) (Hemoglobin gamma-A chain),HBG1 PRO2979,Homo sapiens (Human),147,HBG1
 P69892,P69892,reviewed,HBG2_HUMAN,Hemoglobin subunit gamma-2 (Gamma-2-globin) (Hb F Ggamma) (Hemoglobin gamma-2 chain) (Hemoglobin gamma-G chain),HBG2,Homo sapiens (Human),147,HBG2
-P69905,P69905,reviewed,HBA_HUMAN,Hemoglobin subunit alpha (Alpha-globin) (Hemoglobin alpha chain) [Cleaved into: Hemopressin],HBA1; HBA2,Homo sapiens (Human),142,HBA1;
+P69905,P69905,reviewed,HBA_HUMAN,Hemoglobin subunit alpha (Alpha-globin) (Hemoglobin alpha chain) [Cleaved into: Hemopressin],HBA1; HBA2,Homo sapiens (Human),142,HBA1
 P59665,P59665,reviewed,DEF1_HUMAN,"Neutrophil defensin 1 (Defensin, alpha 1) (HNP-1) (HP-1) (HP1) [Cleaved into: HP 1-56; Neutrophil defensin 2 (HNP-2) (HP-2) (HP2)]",DEFA1 DEF1 DEFA2 MRS; DEFA1B,Homo sapiens (Human),94,DEFA1
 O75874,O75874,reviewed,IDHC_HUMAN,Isocitrate dehydrogenase [NADP] cytoplasmic (IDH) (IDH1) (EC 1.1.1.42) (Cytosolic NADP-isocitrate dehydrogenase) (IDPc) (NADP(+)-specific ICDH) (Oxalosuccinate decarboxylase),IDH1 PICD,Homo sapiens (Human),414,IDH1
 P09960,P09960,reviewed,LKHA4_HUMAN,Leukotriene A-4 hydrolase (LTA-4 hydrolase) (EC 3.3.2.6) (Leukotriene A(4) hydrolase) (Tripeptide aminopeptidase LTA4H) (EC 3.4.11.4),LTA4H LTA4,Homo sapiens (Human),611,LTA4H

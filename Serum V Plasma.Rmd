@@ -1,0 +1,812 @@
+---
+title: "Serum v Plasma"
+output: html_notebook
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+todo x Fix uniprot gene name issue by joining with uniprot name
+database - Correlation serum enrichment v plasma enrichment - Mag-Net
+not MagNet... - I want a lighter purple color - PDF, not PNG - PCA of
+samples
+
+### Libraries
+
+```{r}
+library(cowplot)
+library(ggplot2)
+library(limma)
+library(dplyr)
+library(plotly)
+library(ggrepel)
+library(svglite)
+library(ComplexHeatmap)
+library(tidyverse)
+library(ggtext)
+library(ggbeeswarm)
+library(ggsci)
+library(cowplot)
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+### Import peptides
+
+```{r}
+SVP_peptides <- read.csv("Input/SerumVPlasma_MS2.csv",
+  header=TRUE, 
+  na = "#N/A")%>%
+  mutate(gene_name = str_extract(Protein, "(?<=\\|)[^|]+(?=_HUMAN)"))%>%
+  select(gene_name, everything())
+
+Uniprot <- read.csv("Input/Uniprot_to_gene_nameV2.csv") %>%
+  select(Entry, GeneName)
+
+Uniprot_full <- read.csv("Input/Uniprot_to_gene_nameV2.csv")
+
+# Workaround for *values
+id_cols <- c("Protein", "Protein.Name", "Protein.Description", "Protein.Accession", "gene_name", "Peptide", "Peptide.Modified.Sequence")
+peptide_cols <- setdiff(names(SVP_peptides), id_cols)  # replace with your actual peptide/intensity column names
+
+for (col in peptide_cols) {
+  SVP_peptides[[col]] <- as.numeric(gsub("^\\*", "", SVP_peptides[[col]]))
+}
+
+id_cols <- c("Protein", "Protein.Name", "Protein.Description", "Protein.Accession","gene_name")
+sample_cols <- setdiff(names(SVP_peptides), c(id_cols, "Peptide", "Peptide.Modified.Sequence"))
+
+protein_data <- SVP_peptides %>%
+  group_by(across(all_of(id_cols))) %>%
+  summarise(across(all_of(sample_cols), sum, na.rm = TRUE), .groups = "drop")
+
+colnames(protein_data) <- sub("_\\d+\\.Normalized\\.Area$", "", colnames(protein_data))
+
+protein_data <- protein_data %>%
+  #mutate(across(-Protein, ~ replace(., . == 0, NA))) %>%
+ mutate(Plasma_EV_avg = rowMeans(select(., matches("^P\\d{2}")))) %>%
+  mutate(Serum_EV_avg = rowMeans(select(., matches("^S\\d{2}")))) %>%
+  mutate(Plasma_total_avg = rowMeans(select(., contains("PlasmaTotal")))) %>%
+  mutate(Serum_total_avg = rowMeans(select(., contains("SerumTotal")))) %>%
+  left_join(., Uniprot, by=c("Protein.Accession" = "Entry"))
+
+group_map <- list(
+  "Plasma_EV" = grep("^P\\d{2}", colnames(protein_data), value = TRUE),
+  "Serum_EV"  = grep("^S\\d{2}", colnames(protein_data), value = TRUE)
+)
+
+plasma_samples <- group_map[["Plasma_EV"]]
+serum_samples  <- group_map[["Serum_EV"]]
+
+protein_data_FC <- protein_data %>%
+  mutate(across(all_of(plasma_samples), ~ log2(. / Plasma_total_avg), .names = "{.col}_log2FC")) %>%
+  mutate(across(all_of(serum_samples), ~ log2(. / Serum_total_avg), .names = "{.col}_log2FC"))
+```
+
+Markers for enrichment:
+
+```{r}
+Enriched <- read.csv("Input/EnrichmentMarkersV2.csv")
+Depleted <- read.csv("Input/DepletionMarkers.csv")
+Coagulation <- read.csv("Input/Coagulation.csv")
+Platelet <- read.csv("Input/PlateletV2.csv")
+Clot_formation <- read.csv("Input/reactome_clot_formation.csv")
+
+```
+
+### Barplot by uniprot accession
+
+```{r}
+library(ggtext)
+library(ggbeeswarm)
+library(ggsci)
+library(cowplot)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+selected <- Coagulation$Uniprot.accession
+
+group_map <- list(
+  "Plasma_EV"    = grep("^P\\d{2}", colnames(protein_data), value = TRUE),
+  "Serum_EV"     = grep("^S\\d{2}", colnames(protein_data), value = TRUE),
+  #"Ref_EV"  = grep("^R\\d{2}_", colnames(protein_data), value = TRUE),
+  "Plasma_total" = grep("PlasmaTotal", colnames(protein_data), value = TRUE),
+  "Serum_total"  = grep("SerumTotal", colnames(protein_data), value = TRUE)
+)
+
+sample_cols <- unlist(group_map, use.names = FALSE)
+
+
+
+if (!dir.exists("Output/barplots")) dir.create("Output/barplots", recursive = TRUE)
+
+library(patchwork)
+
+plot_list <- list()
+
+for (i in seq_along(selected)) {
+
+  df_plot <- protein_data %>%
+    filter(Protein.Accession == selected[i])
+
+  if (nrow(df_plot) == 0) {
+    message("Skipping missing protein: ", selected[i])
+    next
+  }
+
+  label_samples <- c("P03", "P04")
+  
+  df_long <- df_plot %>%
+    select(GeneName, all_of(sample_cols)) %>%
+    pivot_longer(cols = all_of(sample_cols),
+                 names_to = "sample",
+                 values_to = "normalized abundance") %>%
+    mutate(condition = case_when(
+      sample %in% group_map[["Plasma_EV"]]    ~ "Plasma_EV",
+      sample %in% group_map[["Serum_EV"]]     ~ "Serum_EV",
+      #sample %in% group_map[["Ref_EV"]]       ~ "Ref_EV",
+      sample %in% group_map[["Plasma_total"]] ~ "Plasma_total",
+      sample %in% group_map[["Serum_total"]]  ~ "Serum_total"
+    )) %>%
+    filter(!is.na(`normalized abundance`)) %>%
+    mutate(sample_label = case_when(
+    grepl(paste0("^", label_samples, collapse = "|"), sample) ~ sub("_.*", "", sample),
+    TRUE ~ NA_character_
+  ))
+
+  if (nrow(df_long) == 0) {
+    message("Skipping protein with no non-missing values: ", selected[i])
+    next
+  }
+
+  df_long$condition <- factor(df_long$condition,
+                               levels = c("Plasma_EV", "Serum_EV", "Ref_EV", "Plasma_total", "Serum_total"))
+
+  p <- ggplot(df_long, aes(x = condition, y = `normalized abundance`, fill = condition)) +
+    stat_summary(fun = mean,
+                 geom = "bar",
+                 color = "black",
+                 width = 0.7,
+                 alpha = 0.5) +
+    stat_summary(fun.data = mean_sdl,
+                 fun.args = list(mult = 1),
+                 geom = "errorbar", width = 0.2) +
+    geom_quasirandom(width = 0.2, size = 2, shape = 21, color = "black") +
+   # geom_text_repel(aes(label = sample_label),
+   #              color = "black", size = 3, fontface = "bold",
+   #              na.rm = TRUE, box.padding = 0.4, max.overlaps = Inf) +
+    scale_fill_manual(values = c(
+    "Plasma_EV"    = "#9c5ae2",
+    "Serum_EV"     = "#F2C438", 
+    "Plasma_total" = "#377EB8",
+    "Serum_total"  = "#D72638"
+  )) +
+    theme_cowplot() +
+    labs(
+      title = df_long$GeneName[[1]],
+      y = "normalized abundance",
+      x = NULL
+    ) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12)
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+  plot_list[[selected[i]]] <- p
+}
+
+n_plots <- length(plot_list)
+n_cols  <- 5
+n_rows  <- ceiling(n_plots / n_cols)
+
+combined <- wrap_plots(plot_list, ncol = n_cols)
+
+ggsave("Output/barplots/Coag_MS2.pdf",
+       plot = combined,
+       width = n_cols * 4,
+       height = n_rows * 4,
+       limitsize = FALSE)
+```
+
+### Barplot by uniprot gene name
+
+```{r}
+library(ggtext)
+library(ggbeeswarm)
+library(ggsci)
+library(cowplot)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+selected <- Clot_formation$gene_name
+
+group_map <- list(
+  "Plasma_EV"    = grep("^P\\d{2}_", colnames(protein_data), value = TRUE),
+  "Serum_EV"     = grep("^S\\d{2}_", colnames(protein_data), value = TRUE),
+  #"Ref_EV"  = grep("^R\\d{2}_", colnames(protein_data), value = TRUE),
+  "Plasma_total" = grep("PlasmaTotal", colnames(protein_data), value = TRUE),
+  "Serum_total"  = grep("SerumTotal", colnames(protein_data), value = TRUE)
+)
+
+sample_cols <- unlist(group_map, use.names = FALSE)
+
+if (!dir.exists("Output/barplots")) dir.create("Output/barplots", recursive = TRUE)
+
+library(patchwork)
+
+plot_list <- list()
+
+for (i in seq_along(selected)) {
+
+  df_plot <- protein_data %>%
+    filter(GeneName == selected[i])
+
+  if (nrow(df_plot) == 0) {
+    message("Skipping missing protein: ", selected[i])
+    next
+  }
+
+  df_long <- df_plot %>%
+    select(GeneName, all_of(sample_cols)) %>%
+    pivot_longer(cols = all_of(sample_cols),
+                 names_to = "sample",
+                 values_to = "normalized abundance") %>%
+    mutate(condition = case_when(
+      sample %in% group_map[["Plasma_EV"]]    ~ "Plasma_EV",
+      sample %in% group_map[["Serum_EV"]]     ~ "Serum_EV",
+      #sample %in% group_map[["Ref_EV"]]       ~ "Ref_EV",
+      sample %in% group_map[["Plasma_total"]] ~ "Plasma_total",
+      sample %in% group_map[["Serum_total"]]  ~ "Serum_total"
+    )) %>%
+    filter(!is.na(`normalized abundance`))
+
+  if (nrow(df_long) == 0) {
+    message("Skipping protein with no non-missing values: ", selected[i])
+    next
+  }
+
+  df_long$condition <- factor(df_long$condition,
+                               levels = c("Plasma_EV", "Serum_EV", "Ref_EV", "Plasma_total", "Serum_total"))
+
+  p <- ggplot(df_long, aes(x = condition, y = `normalized abundance`, fill = condition)) +
+    stat_summary(fun = mean,
+                 geom = "bar",
+                 color = "black",
+                 width = 0.7,
+                 alpha = 0.5) +
+    stat_summary(fun.data = mean_sdl,
+                 fun.args = list(mult = 1),
+                 geom = "errorbar", width = 0.2) +
+    geom_quasirandom(width = 0.2, size = 2, shape = 21, color = "black") +
+    scale_fill_viridis_d() +
+    theme_cowplot() +
+    labs(
+      title = df_long$GeneName[[1]],
+      y = "normalized abundance",
+      x = NULL
+    ) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 12)
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+  plot_list[[selected[i]]] <- p
+}
+
+n_plots <- length(plot_list)
+n_cols  <- 5
+n_rows  <- ceiling(n_plots / n_cols)
+
+combined <- wrap_plots(plot_list, ncol = n_cols)
+ 
+ggsave("Output/barplots/clot_formation_outlierless_v1.png",
+       plot = combined,
+       width = n_cols * 4,
+       height = n_rows * 5,
+       limitsize = FALSE)
+```
+
+### Fold change enrichment
+
+```{r}
+plot_enriched_barplot <- function(selected, title, outfile = NULL,
+                                    x_font_size = 14, legend_pos = "right") {
+
+  group_map <- list(
+    "Plasma_EV" = grep("^P\\d{2}.*_log2FC$", colnames(protein_data_FC), value = TRUE),
+    "Serum_EV"  = grep("^S\\d{2}.*_log2FC$", colnames(protein_data_FC), value = TRUE)
+  )
+  sample_cols <- unlist(group_map, use.names = FALSE)
+
+  if (!dir.exists("Output/barplots")) dir.create("Output/barplots", recursive = TRUE)
+
+  df_all <- protein_data_FC %>%
+    filter(Protein.Accession %in% selected) %>%
+    select(GeneName, Protein.Accession, all_of(sample_cols)) %>%
+    pivot_longer(cols = all_of(sample_cols),
+                 names_to = "sample",
+                 values_to = "log2FC over total plasma or serum") %>%
+    mutate(condition = case_when(
+      sample %in% group_map[["Plasma_EV"]] ~ "Plasma EV",
+      sample %in% group_map[["Serum_EV"]]  ~ "Serum EV"
+    )) %>%
+    filter(!is.na(`log2FC over total plasma or serum`))
+
+  # preserve the order proteins appear in `selected`
+  df_all$GeneName <- factor(df_all$GeneName,
+                             levels = unique(df_all$GeneName[order(match(df_all$Protein.Accession, selected))]))
+  df_all$condition <- factor(df_all$condition, levels = c("Plasma EV", "Serum EV"))
+
+  p <- ggplot(df_all, aes(x = GeneName, y = `log2FC over total plasma or serum`,
+                            fill = condition, group = condition)) +
+    stat_summary(fun = mean,
+                 geom = "bar",
+                 color = "black",
+                 position = position_dodge(width = 0.8),
+                 width = 0.7) +
+    stat_summary(fun.data = mean_sdl,
+                 fun.args = list(mult = 1),
+                 geom = "errorbar",
+                 position = position_dodge(width = 0.8),
+                 width = 0.3) +
+    scale_fill_manual(values = c("Plasma EV" = "#9c5ae2", "Serum EV" = "#F2C438")) +
+    theme_cowplot() +
+    labs(
+      title = title,
+      y = "log2FC over total plasma or serum",
+      x = NULL,
+      fill = NULL
+    ) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = x_font_size),
+      legend.position = legend_pos
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0)))
+
+  if (!is.null(outfile)) {
+    ggsave(outfile, plot = p, width = max(8, length(selected) * 0.7), height = 5)
+  }
+
+  return(p)
+}
+
+p1 <- plot_enriched_barplot(Platelet$Uniprot.accession, "Platelet markers",
+                              "Output/barplots/Platelet_FC_MS2_V5.pdf", legend_pos = c(0.1, 0.15))
+
+p2 <- plot_enriched_barplot(Enriched$Uniprot.accession, "EV markers enriched by Mag-Net",
+                              "Output/barplots/Enriched_FC_MS2_V5.pdf", legend_pos = c(0.2, 0.85))
+
+p3 <- plot_enriched_barplot(Depleted$Uniprot.accession, "Markers depleted by Mag-Net",
+                              "Output/barplots/Depleted_FC_MS2_V5.pdf", legend_pos = c(0.8, 0.15))
+```
+
+### Scatter plots for correlation
+
+```{r}
+plot_list <- list()
+
+highlight_accessions <- Enriched$Uniprot.accession   # red
+depleted_accessions  <- Depleted$Uniprot.accession    # blue -- swap in your actual depleted list
+
+for (i in 1:20) {
+  n <- sprintf("%02d", i)
+
+  p_col <- grep(paste0("^P", n, "_log2FC"), colnames(protein_data_FC), value = TRUE)
+  s_col <- grep(paste0("^S", n, "_log2FC"), colnames(protein_data_FC), value = TRUE)
+
+  if (length(p_col) != 1 || length(s_col) != 1) {
+    message("Skipping pair ", n, " — expected 1 match each, found P:", length(p_col), " S:", length(s_col))
+    next
+  }
+
+  df <- protein_data_FC %>%
+    select(GeneName, Protein.Accession, x = all_of(p_col), y = all_of(s_col)) %>%
+    filter(!is.na(x), !is.na(y), !is.infinite(x), !is.infinite(y))
+
+  if (nrow(df) == 0) {
+    message("Skipping pair ", n, " — no complete points")
+    next
+  }
+
+  r_all <- cor(df$x, df$y, use = "complete.obs")
+
+  df <- df %>%
+    mutate(
+      quadrant = case_when(
+        x >= 0 & y >= 0 ~ "Q1",
+        x <  0 & y >= 0 ~ "Q2",
+        x <  0 & y <  0 ~ "Q3",
+        x >= 0 & y <  0 ~ "Q4"
+      ),
+      dist = sqrt(x^2 + y^2),
+      is_highlighted = Protein.Accession %in% highlight_accessions,
+      is_depleted    = Protein.Accession %in% depleted_accessions
+    )
+
+  top_labels <- df %>%
+    group_by(quadrant) %>%
+    slice_max(dist, n = 5, with_ties = FALSE) %>%
+    ungroup()
+
+  highlight_labels <- df %>% filter(is_highlighted)
+  depleted_labels  <- df %>% filter(is_depleted)
+  
+combined_labels <- bind_rows(
+  highlight_labels %>% mutate(label_color = "#D72638"),
+  depleted_labels  %>% mutate(label_color = "#26567E")
+)
+
+p <- ggplot(df, aes(x = x, y = y)) +
+    geom_point(color = "grey60", size = 1.5, alpha = 0.4) +
+    geom_point(data = highlight_labels, color = "#D72638", size = 2, alpha = 1) +
+    geom_point(data = depleted_labels, color = "#377EB8", size = 2, alpha = 1) +
+    
+    scale_color_identity() +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+    geom_abline(slope = 1, linetype = "dashed") +
+  geom_text_repel(data = combined_labels, aes(label = GeneName, color = label_color),
+                     size = 2.5, fontface = "bold",
+                     box.padding = 0.3, max.overlaps = 15,
+                     show.legend = FALSE) +
+    annotate("text", x = -Inf, y = Inf, hjust = -0.1, vjust = 1.5,
+             label = paste0("R = ", round(r_all, 2)),
+             color = "grey40", size = 3, fontface = "bold") +
+    labs(title = paste0("Pair ", n), x = NULL, y = NULL) +
+    coord_cartesian(xlim = c(-10, 10), ylim = c(-10, 10)) +
+    theme_cowplot() +
+    theme(plot.title = element_text(size = 11),
+          panel.border = element_rect(color = "black", fill = NA, linewidth = 1))
+
+  plot_list[[n]] <- p
+}
+
+combined <- wrap_plots(plot_list, ncol = 5)
+
+ggsave("Output/scatterplots/paired_PS_grid_enriched_dep_V2.pdf",
+       plot = combined,
+       width = 5 * 3,
+       height = 4 * 3,
+       limitsize = FALSE)
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(dplyr)
+
+if (!dir.exists("Output")) dir.create("Output", recursive = TRUE)
+
+## --- 1. Select the log2FC columns for each condition -----------------
+
+plasma_log2fc_cols <- grep("^P\\d{2}_.*_log2FC$", colnames(protein_data_FC), value = TRUE)
+serum_log2fc_cols  <- grep("^S\\d{2}_.*_log2FC$", colnames(protein_data_FC), value = TRUE)
+
+df_plasma <- protein_data_FC %>%
+  select(all_of(plasma_log2fc_cols)) %>%
+  filter(if_all(everything(), ~ !is.infinite(.))) %>%
+  na.omit()
+
+df_serum <- protein_data_FC %>%
+  select(all_of(serum_log2fc_cols)) %>%
+  filter(if_all(everything(), ~ !is.infinite(.))) %>%
+  na.omit()
+
+df_both <- protein_data_FC %>%
+  select(all_of(c(plasma_log2fc_cols, serum_log2fc_cols))) %>%
+  filter(if_all(everything(), ~ !is.infinite(.))) %>%
+  na.omit()
+
+## --- 2. Compute pairwise Spearman correlations ------------------------
+
+corrs_plasma <- cor(df_plasma, method = "spearman")
+corrs_serum  <- cor(df_serum,  method = "spearman")
+corrs_all    <- cor(df_both,   method = "spearman")
+
+## --- 3. Heatmaps -------------------------------------------------------
+
+col_fun <- colorRamp2(c(0.6, 0.8, 1), c("blue", "white", "red"))ß
+
+plot_corr_heatmap <- function(mat, filename, width = 12, height = 12) {
+  pdf(filename, width = width, height = height)
+  ht <- Heatmap(
+    mat,
+    cluster_rows = TRUE,
+    cluster_columns = TRUE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    column_names_side = "top",
+    col = col_fun,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+      grid.text(
+        round(mat[i, j], 3),
+        x, y,
+        gp = gpar(fontsize = 8)
+      )
+    }
+  )
+  draw(ht)
+  dev.off()
+}
+
+plot_corr_heatmap(corrs_plasma, "Output/log2FC_plasma_corr.pdf")
+plot_corr_heatmap(corrs_serum,  "Output/log2FC_serum_corr.pdf")
+plot_corr_heatmap(corrs_all,    "Output/log2FC_combined_corr.pdf", width = 18, height = 18)
+```
+
+### Scatter plot, on average
+
+```{r}
+highlight_accessions <- Enriched$Uniprot.accession   # red
+depleted_accessions  <- Depleted$Uniprot.accession    # blue
+Coag_accessions <- Coagulation$Uniprot.accession
+
+df <- protein_data_FC %>%
+  mutate(
+    x = log2(Plasma_EV_avg / Plasma_total_avg),
+    y = log2(Serum_EV_avg / Serum_total_avg) 
+  ) %>%
+  select(GeneName, Protein.Accession, x, y) %>%
+  filter(!is.na(x), !is.na(y), !is.infinite(x), !is.infinite(y))
+
+r_all <- cor(df$x, df$y, use = "complete.obs")
+
+df <- df %>%
+  mutate(
+    quadrant = case_when(
+      x >= 0 & y >= 0 ~ "Q1",
+      x <  0 & y >= 0 ~ "Q2",
+      x <  0 & y <  0 ~ "Q3",
+      x >= 0 & y <  0 ~ "Q4"
+    ),
+    dist = sqrt(x^2 + y^2),
+    is_highlighted = Protein.Accession %in% highlight_accessions,
+    is_depleted    = Protein.Accession %in% depleted_accessions,
+    is_coag = Protein.Accession %in% Coag_accessions
+  )
+
+top_labels <- df %>%
+  group_by(quadrant) %>%
+  slice_max(dist, n = 5, with_ties = FALSE) %>%
+  ungroup()
+
+highlight_labels <- df %>% filter(is_highlighted)
+depleted_labels  <- df %>% filter(is_depleted)
+coag_labels <- df %>% filter(is_coag)
+
+combined_labels <- bind_rows(
+  highlight_labels %>% mutate(label_color = "#E36370"),
+  depleted_labels  %>% mutate(label_color = "#629FD0"),
+  coag_labels %>% mutate(label_color = "#ECA400")
+  
+)
+
+p <- ggplot(df, aes(x = x, y = y)) +
+  geom_point(color = "grey60", size = 1.5, alpha = 0.4) +
+  geom_point(data = highlight_labels, color = "#D72638", size = 2, alpha = 1) +
+  geom_point(data = depleted_labels, color = "#377EB8", size = 2, alpha = 1) +
+  geom_point(data = coag_labels, color = "#ECA400", size = 2, alpha = 1) +
+  scale_color_identity() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  geom_abline(slope = 1, linetype = "dashed") +
+  geom_text_repel(data = combined_labels, aes(label = GeneName, color = label_color),
+                 size = 4, fontface = "bold",
+                 box.padding = 0.6,        # more space around each label
+                 point.padding = 0.5,      # more space between label and its point
+                 force = 3,                # stronger repulsion between labels
+                 force_pull = 0.5,         # weaker pull back toward the point (lets them drift further)
+                 max.overlaps = 20,
+                 show.legend = FALSE,
+                 bg.color = "black", bg.r = 0.2,
+                 seed = 42) +              # keep layout reproducible while you tune
+  annotate("text", x = -Inf, y = Inf, hjust = -0.1, vjust = 1.5,
+           label = paste0("R = ", round(r_all, 2)),
+           color = "grey40", size = 3, fontface = "bold") +
+  labs(title = "Average log2(EV/total)", x = "Plasma log2(EV/plasma total)", y = "Serum log2(EV/serum total)") +
+  coord_cartesian(xlim = c(-10, 10), ylim = c(-10, 10)) +
+  theme_cowplot() +
+  theme(plot.title = element_text(size = 11),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1))
+
+ggsave("Output/scatterplots/average_PS_enriched_dep.pdf",
+       plot = p,
+       width = 6,
+       height = 6)
+```
+
+```{r}
+T1D_samples <- read.csv("Output/251125_normed_proteins.csv")
+
+selected <- Enriched$Uniprot.accession
+
+group_map <- list(
+  "Tocil"  = grep("^T\\d{2}_", colnames(T1D_samples), value = TRUE),
+  "Siltux" = grep("^S\\d{2}_", colnames(T1D_samples), value = TRUE)
+)
+
+sample_cols <- unlist(group_map, use.names = FALSE)
+
+# Helper: extract the 2-digit sample number and determine odd/even -> pre/post
+get_timepoint <- function(sample_name) {
+  num <- as.integer(sub("^[TS](\\d{2})_.*", "\\1", sample_name))
+  ifelse(num %% 2 == 1, "pre", "post")
+}
+
+if (!dir.exists("Output/barplots")) dir.create("Output/barplots", recursive = TRUE)
+
+library(patchwork)
+
+plot_list <- list()
+
+for (i in seq_along(selected)) {
+
+  df_plot <- T1D_samples %>%
+    filter(Protein.Accession == selected[i])
+
+  if (nrow(df_plot) == 0) {
+    message("Skipping missing protein: ", selected[i])
+    next
+  }
+
+  df_long <- df_plot %>%
+    select(GeneName, all_of(sample_cols)) %>%
+    pivot_longer(cols = all_of(sample_cols),
+                 names_to = "sample",
+                 values_to = "normalized abundance") %>%
+    mutate(
+      drug = case_when(
+        sample %in% group_map[["Tocil"]]  ~ "Tocil",
+        sample %in% group_map[["Siltux"]] ~ "Siltux"
+      ),
+      timepoint = get_timepoint(sample),
+      condition = paste(drug, timepoint, sep = "_")
+    ) %>%
+    filter(!is.na(`normalized abundance`))
+
+  if (nrow(df_long) == 0) {
+    message("Skipping protein with no non-missing values: ", selected[i])
+    next
+  }
+
+  df_long$condition <- factor(df_long$condition,
+                               levels = c("Tocil_pre", "Tocil_post", "Siltux_pre", "Siltux_post"))
+
+  p <- ggplot(df_long, aes(x = condition, y = `normalized abundance`, fill = condition)) +
+    stat_summary(fun = mean,
+                 geom = "bar",
+                 color = "black",
+                 width = 0.7,
+                 alpha = 0.8) +
+    stat_summary(fun.data = mean_sdl,
+                 fun.args = list(mult = 1),
+                 geom = "errorbar", width = 0.2) +
+    geom_quasirandom(width = 0.2, size = 2, shape = 21, color = "black") +
+    scale_fill_manual(values = c("Tocil_pre" = "#89a9e4", 
+                                 "Tocil_post" = "#0a369d", 
+                                 "Siltux_pre" = "#f192aa", 
+                                 "Siltux_post"= "#da4167")) +
+    theme_cowplot() +
+    labs(
+      title = df_long$GeneName[[1]],
+      y = "normalized abundance",
+      x = NULL
+    ) +
+    theme(
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 10)
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+  plot_list[[selected[i]]] <- p
+}
+
+n_plots <- length(plot_list)
+n_cols  <- 5
+n_rows  <- ceiling(n_plots / n_cols)
+
+combined <- wrap_plots(plot_list, ncol = n_cols)
+
+ggsave("Output/barplots/Enriched_T1D_MS2_4bar.png",
+       plot = combined,
+       width = n_cols * 4,
+       height = n_rows * 5,
+       limitsize = FALSE)
+```
+
+### PCA
+
+```{r}
+
+
+sample_cols <- c(
+  grep("^P\\d{2}", colnames(protein_data), value = TRUE),
+  grep("^S\\d{2}", colnames(protein_data), value = TRUE),
+  grep("^PlasmaTotal", colnames(protein_data), value = TRUE),
+  grep("^SerumTotal", colnames(protein_data), value = TRUE)
+)
+
+protein_data_matrix <- protein_data %>%
+  select(GeneName, all_of(sample_cols)) %>%
+  filter(if_all(all_of(sample_cols), ~ !is.na(.) & !is.infinite(.))) 
+
+gene_names <- protein_data_matrix$GeneName
+
+mat <- protein_data_matrix %>%
+  select(all_of(sample_cols)) %>%
+  as.matrix()
+
+rownames(mat) <- gene_names
+
+## --- 2. Run PCA on samples (rows = samples after transpose) -----------
+
+PCA <- prcomp(t(mat), scale. = TRUE)
+PCA_x <- as.data.frame(PCA$x)
+PCA_x$sample <- rownames(PCA_x)
+
+## --- 3. Assign group labels for coloring -------------------------------
+
+PCA_x <- PCA_x %>%
+  mutate(group = case_when(
+    grepl("^P\\d{2}", sample) ~ "Plasma_EV",
+    grepl("^S\\d{2}", sample) ~ "Serum_EV",
+    grepl("^PlasmaTotal", sample) ~ "Plasma_total",
+    grepl("^SerumTotal", sample) ~ "Serum_total"
+  ))
+
+## --- 4. Scores plot -----------------------------------------------------
+
+samples_to_label <- c("P03", "P04")  # swap in your actual sample names
+
+label_df <- PCA_x %>% filter(sample %in% samples_to_label)
+
+var_explained <- round(summary(PCA)$importance[2,] * 100, 1 )
+
+ggplot(PCA_x, aes(x = PC1, y = PC2, color = group)) +
+  geom_point(size = 4, stroke = 0) +
+  geom_text_repel(data = label_df, aes(label = sample),
+                   color = "black", size = 3, fontface = "bold",
+                   box.padding = 0.5, max.overlaps = Inf) +
+  scale_color_manual(values = c(
+    "Plasma_EV"    = "#9c5ae2",
+    "Serum_EV"     = "#F2C438",
+    "Plasma_total" = "#377EB8",
+    "Serum_total"  = "#D72638"
+  )) +
+  theme_cowplot() +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    legend.position = c(0.98, 0.98),
+    legend.justification = c("right", "top"),
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.4),
+    legend.margin = margin(4, 6, 4, 6)
+  ) +
+  labs(
+       x = paste0("PCA1 (", var_explained[1], "%)"),
+       y = paste0("PCA2 (", var_explained[2], "%)"),
+       color = NULL)
+ggsave("output/SVP_PCA_v2.PDF", width=4, height=3.5)
+
+```

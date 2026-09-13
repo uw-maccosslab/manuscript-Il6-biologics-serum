@@ -43,6 +43,121 @@ protein_data <- all_peptides %>%
 protein_data <- protein_data %>%
   mutate(across(-Protein, ~ replace(., . == 0, NA)))
 ```
+### QC - protein and peptide counts
+```{r}
+counts <- read.csv("Input/peptide_protein_count.csv") %>%
+  select(!contains("DPRef"))
+
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(cowplot)
+library(stringr)
+
+if (!dir.exists("Output/barplots")) dir.create("Output/barplots", recursive = TRUE)
+
+peptide_cols <- grep("Count\\.Distinct\\.Peptide$", colnames(counts), value = TRUE)
+protein_cols <- grep("Count\\.Distinct\\.Protein$", colnames(counts), value = TRUE)
+
+## --- Peptide count barplot ---------------------------------------------
+
+df_peptide <- counts %>%
+  select(all_of(peptide_cols)) %>%
+  pivot_longer(cols = everything(), names_to = "sample", values_to = "peptide_count") %>%
+  mutate(sample_label = sub("_.*", "", sample))
+
+df_peptide$sample_label <- factor(df_peptide$sample_label, levels = unique(df_peptide$sample_label))
+
+p_peptide <- ggplot(df_peptide, aes(x = sample_label, y = peptide_count)) +
+  geom_col(fill = "grey70", color = "black", width = 0.7) +
+  theme_cowplot() +
+  labs(title = "Distinct peptide count by sample",
+       y = "Distinct peptide count",
+       x = NULL) +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+ggsave("Output/barplots/peptide_count_by_sample.pdf", plot = p_peptide, width = 12, height = 5)
+
+## --- Protein count barplot ----------------------------------------------
+
+df_protein <- counts %>%
+  select(all_of(protein_cols)) %>%
+  pivot_longer(cols = everything(), names_to = "sample", values_to = "protein_count") %>%
+  mutate(sample_label = sub("_.*", "", sample))
+
+df_protein$sample_label <- factor(df_protein$sample_label, levels = unique(df_protein$sample_label))
+
+p_protein <- ggplot(df_protein, aes(x = sample_label, y = protein_count)) +
+  geom_col(fill = "grey70", color = "black", width = 0.7) +
+  theme_cowplot() +
+  labs(title = "Distinct protein count by sample",
+       y = "Distinct protein count",
+       x = NULL) +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+ggsave("Output/barplots/protein_count_by_sample.pdf", plot = p_protein, width = 12, height = 5)
+```
+
+```{r}
+df_counts_agg <- bind_rows(
+  counts %>%
+    select(all_of(peptide_cols)) %>%
+    pivot_longer(cols = everything(), names_to = "sample", values_to = "count") %>%
+    mutate(metric = "Peptide"),
+  counts %>%
+    select(all_of(protein_cols)) %>%
+    pivot_longer(cols = everything(), names_to = "sample", values_to = "count") %>%
+    mutate(metric = "Protein")
+)
+
+df_counts_agg$metric <- factor(df_counts_agg$metric, levels = c("Peptide", "Protein"))
+
+p_counts_agg <- ggplot(df_counts_agg, aes(x = metric, y = count, fill = metric)) +
+  stat_summary(fun = mean,
+               geom = "bar",
+               color = "black",
+               width = 0.7,
+               alpha = 0.5) +
+  stat_summary(fun.data = mean_sdl,
+               fun.args = list(mult = 1),
+               geom = "errorbar", width = 0.2) +
+  geom_quasirandom(width = 0.2, size = 2, shape = 21, color = "black") +
+  stat_summary(fun = mean,
+               geom = "text",
+               aes(label = paste("mean =",round(after_stat(y)))),
+               vjust = -2, size = 3.5, fontface = "bold") +
+  scale_fill_manual(values = c("Peptide" = "#F2C438", "Protein" = "#9c5ae2")) +
+  theme_cowplot() +
+  labs(title = "Boundary-imputed",
+       y = "Count",
+       x = NULL) +
+  theme(
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    legend.position = "none"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+
+ggsave("Output/barplots/peptide_vs_protein_count_aggregate.pdf", plot = p_counts_agg, width = 4, height = 5)
+```
+
 
 ### Data manipulation, mAb peptide-level
 
@@ -342,10 +457,12 @@ library(ggtext)
 library(ggbeeswarm)
 library(ggsci)
 library(cowplot)
+normed_gn <- read.csv("Output/251125_normed_proteins.csv")
 
 var <- c(rep(c("siltuximab baseline", "siltuximab treatment", "tocilizumab baseline","tocilizumab treatment"), each=10))
 
-txt <- "PSMD6,PSMD13,PSMC1,PSMD2,PSMD8,IKBKB,PSMC5,PSMD12,PSMC2,PSMD14,PSMC3,PSMB5,PSMC4,UBB,NFKB1,PSMD1,PSMC6,PSMB6,MAP3K7,PSMA5,PSMD11,PSMB4,PSMB3,PSMA4,PSMB7,PSMA7,PSMA2,PSMB2,PSMA1,PSMA3,PSMA6"
+#txt <- "PSMD6,PSMD13,PSMC1,PSMD2,PSMD8,IKBKB,PSMC5,PSMD12,PSMC2,PSMD14,PSMC3,PSMB5,PSMC4,UBB,NFKB1,PSMD1,PSMC6,PSMB6,MAP3K7,PSMA5,PSMD11,PSMB4,PSMB3,PSMA4,PSMB7,PSMA7,PSMA2,PSMB2,PSMA1,PSMA3,PSMA6"
+txt <- "PPBP"
 
 selected <- strsplit(txt, ",")[[1]]
 
@@ -871,6 +988,17 @@ ggplot(df_pt1_norm, aes(x = log10(V1), y = log10(V2))) +
 
 ggsave("ptT09-S19.pdf", height=5,width=5)
 ```
+
+### Correlation plots, EV markers
+```{r}
+normed <- read.csv("Output/251125_normed_proteins.csv")
+pairs <-read.csv("Input/pairs.csv")
+Enrichment <- read.csv("Input/EnrichmentMarkersV2.csv")
+Depletion <- read.csv("DepletionMarkers.csv")
+
+
+```
+
 
 ## PCA
 
