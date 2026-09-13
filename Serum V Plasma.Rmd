@@ -593,9 +593,9 @@ depleted_labels  <- df %>% filter(is_depleted)
 coag_labels <- df %>% filter(is_coag)
 
 combined_labels <- bind_rows(
-  highlight_labels %>% mutate(label_color = "#E36370"),
-  depleted_labels  %>% mutate(label_color = "#629FD0"),
-  coag_labels %>% mutate(label_color = "#ECA400")
+  highlight_labels %>% mutate(label_color = "#D72638"),
+  depleted_labels  %>% mutate(label_color = "#377EB8"),
+  coag_labels %>% mutate(label_color = "#EC9F05")
   
 )
 
@@ -603,7 +603,7 @@ p <- ggplot(df, aes(x = x, y = y)) +
   geom_point(color = "grey60", size = 1.5, alpha = 0.4) +
   geom_point(data = highlight_labels, color = "#D72638", size = 2, alpha = 1) +
   geom_point(data = depleted_labels, color = "#377EB8", size = 2, alpha = 1) +
-  geom_point(data = coag_labels, color = "#ECA400", size = 2, alpha = 1) +
+  geom_point(data = coag_labels, color = "#EC9F05", size = 2, alpha = 1) +
   scale_color_identity() +
   geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
   geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
@@ -616,7 +616,7 @@ p <- ggplot(df, aes(x = x, y = y)) +
                  force_pull = 0.5,         # weaker pull back toward the point (lets them drift further)
                  max.overlaps = 20,
                  show.legend = FALSE,
-                 bg.color = "black", bg.r = 0.2,
+                 bg.color = "white", bg.r = 0.2,
                  seed = 42) +              # keep layout reproducible while you tune
   annotate("text", x = -Inf, y = Inf, hjust = -0.1, vjust = 1.5,
            label = paste0("R = ", round(r_all, 2)),
